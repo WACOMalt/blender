@@ -928,7 +928,8 @@ if(UNIX AND NOT APPLE)
         unset(_suffix)
       endif()
 
-      if(WITH_USD)
+      # System USD (e.g. Arch) has no bundled python module at this location.
+      if(WITH_USD AND EXISTS "${USD_LIBRARY_DIR}/python/")
         # Install to the same directory as the source, so debian-like
         # distributions are happy with their policy.
         set(_suffix "site-packages")
