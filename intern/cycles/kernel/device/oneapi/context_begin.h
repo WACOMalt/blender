@@ -7,5 +7,5 @@
 /* clang-format off */
 struct ONEAPIKernelContext : public KernelGlobalsGPU {
   public:
-#    include "kernel/device/gpu/image.h"
+#    include "kernel/device/oneapi/image.h"
   /* clang-format on */

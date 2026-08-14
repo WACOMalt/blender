@@ -53,12 +53,11 @@ OneapiDevice::OneapiDevice(const DeviceInfo &info, Stats &stats, Profiler &profi
     : GPUDevice(info, stats, profiler, headless)
 {
   /* Verify that base class types can be used with specific backend types */
-  static_assert(sizeof(texMemObject) ==
-                sizeof(sycl::ext::oneapi::experimental::sampled_image_handle));
-  static_assert(sizeof(arrayMemObject) ==
-                sizeof(sycl::ext::oneapi::experimental::image_mem_handle));
+  static_assert(sizeof(texMemObject) == sizeof(void *));
+  static_assert(sizeof(arrayMemObject) == sizeof(void *));
 
-  need_image_info = false;
+  /* Xe-LP fork: software texture sampling reads from the KernelImageInfo table. */
+  need_image_info = true;
   use_hardware_raytracing = info.use_hardware_raytracing;
 
   oneapi_set_error_cb(queue_error_cb, &oneapi_error_string_);
@@ -690,202 +689,23 @@ void OneapiDevice::global_free(device_memory &mem)
   }
 }
 
-static sycl::ext::oneapi::experimental::image_descriptor image_desc(const device_image &mem)
-{
-  /* Image Texture Storage */
-  sycl::image_channel_type channel_type;
-
-  switch (mem.data_type) {
-    case TYPE_UCHAR:
-      channel_type = sycl::image_channel_type::unorm_int8;
-      break;
-    case TYPE_UINT16:
-      channel_type = sycl::image_channel_type::unorm_int16;
-      break;
-    case TYPE_FLOAT:
-      channel_type = sycl::image_channel_type::fp32;
-      break;
-    case TYPE_HALF:
-      channel_type = sycl::image_channel_type::fp16;
-      break;
-    default:
-      channel_type = sycl::image_channel_type::unorm_int8;
-      assert(0);
-      break;
-  }
-
-  sycl::ext::oneapi::experimental::image_descriptor param;
-  param.width = mem.data_width;
-  param.height = mem.data_height;
-  param.num_channels = mem.data_elements;
-  param.channel_type = channel_type;
-
-  param.verify();
-
-  return param;
-}
-
 void OneapiDevice::image_alloc(device_image &mem)
 {
-  assert(device_queue_);
+  generic_alloc(mem);
+  generic_copy_to(mem);
 
-  size_t size = mem.memory_size();
-
-  sycl::addressing_mode address_mode = sycl::addressing_mode::none;
-  switch (mem.info.extension) {
-    case EXTENSION_REPEAT:
-      address_mode = sycl::addressing_mode::repeat;
-      break;
-    case EXTENSION_EXTEND:
-      address_mode = sycl::addressing_mode::clamp_to_edge;
-      break;
-    case EXTENSION_CLIP:
-      address_mode = sycl::addressing_mode::clamp;
-      break;
-    case EXTENSION_MIRROR:
-      address_mode = sycl::addressing_mode::mirrored_repeat;
-      break;
-    default:
-      assert(0);
-      break;
-  }
-
-  sycl::filtering_mode filter_mode;
-  if (mem.info.interpolation == INTERPOLATION_CLOSEST) {
-    filter_mode = sycl::filtering_mode::nearest;
-  }
-  else {
-    filter_mode = sycl::filtering_mode::linear;
-  }
-
-  /* Image Texture Storage */
-  sycl::image_channel_type channel_type;
-
-  switch (mem.data_type) {
-    case TYPE_UCHAR:
-      channel_type = sycl::image_channel_type::unorm_int8;
-      break;
-    case TYPE_UINT16:
-      channel_type = sycl::image_channel_type::unorm_int16;
-      break;
-    case TYPE_FLOAT:
-      channel_type = sycl::image_channel_type::fp32;
-      break;
-    case TYPE_HALF:
-      channel_type = sycl::image_channel_type::fp16;
-      break;
-    default:
-      assert(0);
-      return;
-  }
-
-  sycl::queue *queue = reinterpret_cast<sycl::queue *>(device_queue_);
-
-  try {
-    Mem *cmem = nullptr;
-    sycl::ext::oneapi::experimental::image_mem_handle memHandle{0};
-    sycl::ext::oneapi::experimental::image_descriptor desc{};
-
-    if (mem.data_height > 0) {
-      /* 2D/3D image -- Tile optimized */
-      const sycl::device &device = reinterpret_cast<sycl::queue *>(queue)->get_device();
-      const size_t max_width = device.get_info<sycl::info::device::image2d_max_width>();
-      const size_t max_height = device.get_info<sycl::info::device::image2d_max_height>();
-
-      if (mem.data_width > max_width || mem.data_height > max_height) {
-        set_error(
-            string_printf("Maximum GPU 2D texture size exceeded (max %zux%zu, found %zux%zu)",
-                          max_width,
-                          max_height,
-                          mem.data_width,
-                          mem.data_height));
-        return;
-      }
-
-      /* 2D texture -- Tile optimized */
-      desc = sycl::ext::oneapi::experimental::image_descriptor(
-          {mem.data_width, mem.data_height, 0}, mem.data_elements, channel_type);
-
-      LOG_DEBUG << "Array 2D/3D allocate: " << mem.name << ", "
-                << string_human_readable_number(mem.memory_size()) << " bytes. ("
-                << string_human_readable_size(mem.memory_size()) << ")";
-
-      sycl::ext::oneapi::experimental::image_mem_handle memHandle =
-          sycl::ext::oneapi::experimental::alloc_image_mem(desc, *queue);
-      if (!memHandle.raw_handle) {
-        set_error("GPU image allocation failed: Raw handle is null");
-        return;
-      }
-
-      /* Copy data from host to the image properly based on the image description */
-      queue->ext_oneapi_copy(mem.host_pointer, memHandle, desc);
-
-      mem.device_pointer = (device_ptr)memHandle.raw_handle;
-      mem.device_size = size;
-      stats.mem_alloc(size);
-
-      thread_scoped_lock lock(device_mem_map_mutex);
-      cmem = &device_mem_map[&mem];
-      cmem->texobject = 0;
-      cmem->array = (arrayMemObject)(memHandle.raw_handle);
+  {
+    /* Update image info. */
+    thread_scoped_lock lock(image_info_mutex);
+    const uint slot = mem.slot;
+    if (slot >= image_info.size()) {
+      /* Allocate some slots in advance, to reduce amount of re-allocations. */
+      image_info.resize(slot + 128);
     }
-    else {
-      /* 1D image -- Linear memory */
-      desc = sycl::ext::oneapi::experimental::image_descriptor(
-          {mem.data_width}, mem.data_elements, channel_type);
-      cmem = generic_alloc(mem);
-      if (!cmem) {
-        return;
-      }
-
-      queue->memcpy((void *)mem.device_pointer, mem.host_pointer, size);
-    }
-
-    queue->wait_and_throw();
-
-    /* Set Mapping and tag that we need to (re-)upload to device */
     KernelImageInfo tex_info = mem.info;
-
-    sycl::ext::oneapi::experimental::bindless_image_sampler samp(
-        address_mode, sycl::coordinate_normalization_mode::normalized, filter_mode);
-
-    if (!is_nanovdb_type(mem.info.data_type)) {
-      sycl::ext::oneapi::experimental::sampled_image_handle imgHandle;
-
-      if (memHandle.raw_handle) {
-        /* Create 2D/3D image handle */
-        imgHandle = sycl::ext::oneapi::experimental::create_image(memHandle, samp, desc, *queue);
-      }
-      else {
-        /* Create 1D image */
-        imgHandle = sycl::ext::oneapi::experimental::create_image(
-            (void *)mem.device_pointer, 0, samp, desc, *queue);
-      }
-
-      thread_scoped_lock lock(device_mem_map_mutex);
-      cmem = &device_mem_map[&mem];
-      cmem->texobject = (texMemObject)(imgHandle.raw_handle);
-
-      tex_info.data = (uint64_t)cmem->texobject;
-    }
-    else {
-      tex_info.data = (uint64_t)mem.device_pointer;
-    }
-
-    {
-      /* Update image info. */
-      thread_scoped_lock lock(image_info_mutex);
-      const uint slot = mem.slot;
-      if (slot >= image_info.size()) {
-        /* Allocate some slots in advance, to reduce amount of re-allocations. */
-        image_info.resize(slot + 128);
-      }
-      image_info[slot] = tex_info;
-      need_image_info = true;
-    }
-  }
-  catch (sycl::exception const &e) {
-    set_error("GPU image allocation failed: runtime exception \"" + string(e.what()) + "\"");
+    tex_info.data = (uint64_t)mem.device_pointer;
+    image_info[slot] = tex_info;
+    need_image_info = true;
   }
 }
 
@@ -895,73 +715,15 @@ void OneapiDevice::image_copy_to(device_image &mem)
     image_alloc(mem);
   }
   else {
-    if (mem.data_height > 0) {
-      /* 2D/3D image -- Tile optimized */
-      sycl::ext::oneapi::experimental::image_descriptor desc = image_desc(mem);
-
-      sycl::queue *queue = reinterpret_cast<sycl::queue *>(device_queue_);
-
-      try {
-        /* Copy data from host to the image properly based on the image description */
-        thread_scoped_lock lock(device_mem_map_mutex);
-        const Mem &cmem = device_mem_map[&mem];
-        sycl::ext::oneapi::experimental::image_mem_handle image_handle{
-            (sycl::ext::oneapi::experimental::image_mem_handle::raw_handle_type)cmem.array};
-        queue->ext_oneapi_copy(mem.host_pointer, image_handle, desc);
-
-#  ifdef WITH_CYCLES_DEBUG
-        queue->wait_and_throw();
-#  endif
-      }
-      catch (sycl::exception const &e) {
-        set_error("oneAPI image copy error: got runtime exception \"" + string(e.what()) + "\"");
-      }
-    }
-    else {
-      generic_copy_to(mem);
-    }
+    generic_copy_to(mem);
   }
 }
 
 void OneapiDevice::image_free(device_image &mem)
 {
+  /* There is no texture memory in SYCL. */
   if (mem.device_pointer) {
-    thread_scoped_lock lock(device_mem_map_mutex);
-    DCHECK(device_mem_map.find(&mem) != device_mem_map.end());
-    const Mem &cmem = device_mem_map[&mem];
-
-    sycl::queue *queue = reinterpret_cast<sycl::queue *>(device_queue_);
-
-    if (cmem.texobject) {
-      /* Free bindless image itself. */
-      sycl::ext::oneapi::experimental::sampled_image_handle image(cmem.texobject);
-      sycl::ext::oneapi::experimental::destroy_image_handle(image, *queue);
-    }
-
-    if (cmem.array) {
-      /* Free image memory. */
-      sycl::ext::oneapi::experimental::image_mem_handle imgHandle{
-          (sycl::ext::oneapi::experimental::image_mem_handle::raw_handle_type)cmem.array};
-
-      try {
-        /* We have allocated only standard image, so we also deallocate only them. */
-        sycl::ext::oneapi::experimental::free_image_mem(
-            imgHandle, sycl::ext::oneapi::experimental::image_type::standard, *queue);
-      }
-      catch (sycl::exception const &e) {
-        set_error("oneAPI image deallocation error: got runtime exception \"" + string(e.what()) +
-                  "\"");
-      }
-
-      stats.mem_free(mem.memory_size());
-      mem.device_pointer = 0;
-      mem.device_size = 0;
-      device_mem_map.erase(device_mem_map.find(&mem));
-    }
-    else {
-      lock.unlock();
-      generic_free(mem);
-    }
+    generic_free(mem);
   }
 }
 
