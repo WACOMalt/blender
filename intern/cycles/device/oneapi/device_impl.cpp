@@ -1296,10 +1296,10 @@ std::vector<sycl::device> available_sycl_devices(
               threads_per_eu =
                   device.get_info<sycl::ext::intel::info::device::gpu_hw_threads_per_eu>();
             }
-            /* This filters out all Level-Zero supported GPUs from older generation than Arc. */
-            if (number_of_eus <= 96 && threads_per_eu == 7) {
-              filter_out = true;
-            }
+            /* Xe-LP fork: accept pre-Arc integrated GPUs (e.g. TGL Iris Xe, 96 EU / 7 t-per-EU).
+             * Upstream filters these out; kernels JIT/AOT-compile fine via IGC. */
+            (void)number_of_eus;
+            (void)threads_per_eu;
             /* if not already filtered out, check driver version. */
             bool check_driver_version = !filter_out;
             /* We don't know how to check driver version strings for non-Intel GPUs. */
