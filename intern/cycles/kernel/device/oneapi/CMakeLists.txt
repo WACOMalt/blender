@@ -21,6 +21,7 @@ set(SRC_KERNEL_DEVICE_ONEAPI_HEADERS
   context_intersect_begin.h
   context_intersect_end.h
   globals.h
+  image.h
   kernel.h
   kernel_templates.h
   ../cpu/bvh.h
