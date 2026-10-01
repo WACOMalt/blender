@@ -18,7 +18,7 @@ sudo pacman -S --needed intel-compute-runtime level-zero-loader level-zero-heade
   opencolorio openexr openimagedenoise openimageio openjpeg2 openpgl \
   openshadinglanguage opensubdiv openvdb openxr potrace pugixml pystring \
   python-numpy python-requests python-zstandard cython sdl2 usd yaml-cpp \
-  pacman-contrib patchelf
+  pacman-contrib patchelf spirv-headers
 ```
 
 ## Configure & build
