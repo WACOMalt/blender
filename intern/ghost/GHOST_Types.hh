@@ -300,6 +300,9 @@ enum GHOST_TDrawingContextType {
 #ifdef WITH_VULKAN_BACKEND
   GHOST_kDrawingContextTypeVulkan,
 #endif
+#ifdef WITH_WEBGPU_BACKEND
+  GHOST_kDrawingContextTypeWebGPU,
+#endif
 };
 
 /** Set "None" as -1 so this can be used as an index. */

@@ -100,6 +100,15 @@ if(WITH_VULKAN_BACKEND)
   add_definitions(-DWITH_VULKAN_BACKEND)
 endif()
 
+if(WITH_WEBGPU_BACKEND)
+  list(APPEND SRC
+    intern/GHOST_ContextWebGPU.cc
+
+    intern/GHOST_ContextWebGPU.hh
+  )
+  add_definitions(-DWITH_WEBGPU_BACKEND)
+endif()
+
 if(WITH_GHOST_DEBUG)
   list(APPEND SRC
     intern/GHOST_EventPrinter.cc

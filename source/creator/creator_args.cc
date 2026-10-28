@@ -1689,7 +1689,7 @@ static int arg_handle_gpu_backend_set(int argc, const char **argv, void * /*data
     fprintf(stderr, "\nError: GPU backend must follow '--gpu-backend'.\n");
     return 0;
   }
-  const char *backends_supported[3] = {nullptr};
+  const char *backends_supported[4] = {nullptr};
   int backends_supported_num = 0;
 
   GPUBackendType gpu_backend = GPU_BACKEND_NONE;
@@ -1711,6 +1711,11 @@ static int arg_handle_gpu_backend_set(int argc, const char **argv, void * /*data
 #  ifdef WITH_METAL_BACKEND
   else if (STREQ(argv[1], (backends_supported[backends_supported_num++] = "metal"))) {
     gpu_backend = GPU_BACKEND_METAL;
+  }
+#  endif
+#  ifdef WITH_WEBGPU_BACKEND
+  else if (STREQ(argv[1], (backends_supported[backends_supported_num++] = "webgpu"))) {
+    gpu_backend = GPU_BACKEND_WEBGPU;
   }
 #  endif
   else {

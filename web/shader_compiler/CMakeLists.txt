@@ -17,6 +17,9 @@ set(DAWN_THIRD_PARTY "${DAWN_DIR}/third_party")
 
 set(CMAKE_CXX_STANDARD 20)
 
+# Abseil uses Emscripten version macros that newer Emscripten versions mark as deprecated.
+add_compile_options(-Wno-deprecated-pragma)
+
 # SPIR-V and glslang first: Dawn skips its third party directories for Emscripten.
 set(SPIRV_HEADERS_SKIP_EXAMPLES ON CACHE BOOL "" FORCE)
 set(SPIRV_HEADERS_SKIP_INSTALL ON CACHE BOOL "" FORCE)

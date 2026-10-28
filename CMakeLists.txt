@@ -983,6 +983,14 @@ else()
   mark_as_advanced(WITH_VULKAN_BACKEND)
 endif()
 
+# WebGPU
+if(EMSCRIPTEN)
+  option(WITH_WEBGPU_BACKEND "Enable WebGPU as graphics backend (web browsers)" ON)
+  mark_as_advanced(WITH_WEBGPU_BACKEND)
+else()
+  set(WITH_WEBGPU_BACKEND OFF)
+endif()
+
 # Metal
 if(APPLE)
   option(WITH_METAL_BACKEND "\

@@ -2436,6 +2436,12 @@ GHOST_TDrawingContextType wm_ghost_drawing_context_type(const GPUBackendType gpu
 #endif
       BLI_assert_unreachable();
       return GHOST_kDrawingContextTypeNone;
+    case GPU_BACKEND_WEBGPU:
+#ifdef WITH_WEBGPU_BACKEND
+      return GHOST_kDrawingContextTypeWebGPU;
+#endif
+      BLI_assert_unreachable();
+      return GHOST_kDrawingContextTypeNone;
   }
 
   /* Avoid control reaches end of non-void function compilation warning, which could be promoted

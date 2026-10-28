@@ -22,9 +22,10 @@ set(WITH_INSTALL_PORTABLE      ON  CACHE BOOL "" FORCE)
 set(WITH_STATIC_LIBS           ON  CACHE BOOL "" FORCE)
 set(WITH_STRICT_BUILD_OPTIONS  ON  CACHE BOOL "" FORCE)
 
-# No native GPU APIs. A WebGL2/WebGPU backend is a later phase.
+# The browser's WebGPU is the GPU backend (in development, enabled once it can draw).
 set(WITH_OPENGL_BACKEND        OFF CACHE BOOL "" FORCE)
 set(WITH_VULKAN_BACKEND        OFF CACHE BOOL "" FORCE)
+set(WITH_WEBGPU_BACKEND        OFF CACHE BOOL "" FORCE)
 
 # x86/ARM specific.
 set(WITH_COMPILER_SIMD         OFF CACHE BOOL "" FORCE)

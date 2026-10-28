@@ -302,6 +302,27 @@ if(WITH_VULKAN_BACKEND)
 endif()
 
 # -----------------------------------------------------------------------------
+# Configure WebGPU
+#
+# The browser's WebGPU through Emscripten's `emdawnwebgpu` port, and the GLSL to WGSL compiler
+# built by `web/build_deps.sh`.
+
+add_library(bf_deps_optional_webgpu INTERFACE)
+add_library(bf::dependencies::optional::webgpu ALIAS bf_deps_optional_webgpu)
+
+if(WITH_WEBGPU_BACKEND)
+  find_library(WEB_SHADER_COMPILER_LIBRARY NAMES web_shader_compiler REQUIRED)
+  find_path(WEB_SHADER_COMPILER_INCLUDE_DIR NAMES web_shader_compiler.h REQUIRED)
+  mark_as_advanced(WEB_SHADER_COMPILER_LIBRARY WEB_SHADER_COMPILER_INCLUDE_DIR)
+  target_compile_options(bf_deps_optional_webgpu INTERFACE "--use-port=emdawnwebgpu")
+  target_link_options(bf_deps_optional_webgpu INTERFACE "--use-port=emdawnwebgpu")
+  target_include_directories(bf_deps_optional_webgpu SYSTEM INTERFACE
+    ${WEB_SHADER_COMPILER_INCLUDE_DIR}
+  )
+  target_link_libraries(bf_deps_optional_webgpu INTERFACE ${WEB_SHADER_COMPILER_LIBRARY})
+endif()
+
+# -----------------------------------------------------------------------------
 # Configure ShaderC
 
 add_library(bf_deps_optional_shaderc INTERFACE)

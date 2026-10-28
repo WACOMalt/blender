@@ -297,6 +297,10 @@ static PyObject *pygpu_platform_backend_type_get(PyObject * /*self*/)
       backend = "METAL";
       break;
     }
+    case GPU_BACKEND_WEBGPU: {
+      backend = "WEBGPU";
+      break;
+    }
     case GPU_BACKEND_NONE: {
       backend = "NONE";
       break;

@@ -266,8 +266,51 @@ build_python() {
   )
 }
 
+# Dawn (for Tint) at the version of Emscripten's emdawnwebgpu port. Its dependencies are fetched
+# from GitHub at the commits in Dawn's DEPS file (abseil: an upstream release, Dawn uses
+# Chromium's mirror).
+fetch_dawn() {
+  fetch_git dawn https://github.com/google/dawn v20260423.175430
+  local third_party="$SRC/dawn/third_party"
+  fetch_commit() {
+    [ -f "$1/.fetched" ] && return 0
+    mkdir -p "$1"
+    (cd "$1" && git init -q && git fetch -q --depth 1 "$2" "$3" && \
+      git -c advice.detachedHead=false checkout -q FETCH_HEAD && touch .fetched)
+  }
+  fetch_commit "$third_party/glslang/src" https://github.com/KhronosGroup/glslang \
+    aa8e19e05f8b30d14b894fb2d94875bb6c8be3c6
+  fetch_commit "$third_party/spirv-headers/src" https://github.com/KhronosGroup/SPIRV-Headers \
+    ad9184e76a66b1001c29db9b0a3e87f646c64de0
+  fetch_commit "$third_party/spirv-tools/src" https://github.com/KhronosGroup/SPIRV-Tools \
+    ff5c50339cc1e9f34f04cb440a3e5fe89db0161d
+  if [ ! -f "$third_party/abseil-cpp/CMakeLists.txt" ]; then
+    rm -rf "$third_party/abseil-cpp"
+    git -c advice.detachedHead=false clone -q --depth 1 --branch 20260107.0 \
+      https://github.com/abseil/abseil-cpp "$third_party/abseil-cpp"
+  fi
+}
+
+# GLSL → WGSL compiler (glslang + Tint) used by the WebGPU backend, see web/shader_compiler/.
+# All its static libraries are merged into libweb_shader_compiler.a.
+build_shader_compiler() {
+  fetch_dawn
+  cmake_build shader_compiler "$ROOT/web/shader_compiler" -DDAWN_DIR="$SRC/dawn" \
+    -DCMAKE_EXE_LINKER_FLAGS="$WEB_FLAGS -sNODERAWFS=1 -sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=4MB"
+  cmake --build "$BUILD/shader_compiler" -j "$JOBS" --target wsc_test
+  local script="$BUILD/shader_compiler/merge.mri"
+  {
+    echo "create $PREFIX/lib/libweb_shader_compiler.a"
+    find "$BUILD/shader_compiler" -name '*.a' | sort | sed 's/^/addlib /'
+    echo "save"
+    echo "end"
+  } > "$script"
+  rm -f "$PREFIX/lib/libweb_shader_compiler.a"
+  emar -M < "$script"
+}
+
 ALL_PACKAGES=(zlib zstd png jpeg brotli freetype fmt eigen imath deflate openjph openexr tbb tiff robinmap
-              expat yamlcpp pystring minizipng opencolorio openimageio python)
+              expat yamlcpp pystring minizipng opencolorio openimageio python shader_compiler)
 
 main() {
   local packages=("$@")

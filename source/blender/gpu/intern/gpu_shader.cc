@@ -176,6 +176,11 @@ static void standard_defines(Vector<StringRefNull> &sources)
     case GPU_BACKEND_VULKAN:
       sources.append("#define GPU_VULKAN\n");
       break;
+    case GPU_BACKEND_WEBGPU:
+      /* Shaders are compiled as Vulkan GLSL, then translated to WGSL. */
+      sources.append("#define GPU_WEBGPU\n");
+      sources.append("#define GPU_VULKAN\n");
+      break;
     default:
       BLI_assert_msg(false, "Invalid GPU Backend Type");
       break;
