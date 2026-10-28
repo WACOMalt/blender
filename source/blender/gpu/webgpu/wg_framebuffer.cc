@@ -71,6 +71,17 @@ void WGFrameBuffer::bind(bool enabled_srgb)
     render_pass_end();
     dirty_attachments_ = false;
   }
+  srgb_ = false;
+  for (int slot = 0; slot < WG_MAX_COLOR_TARGETS; slot++) {
+    if (WGTexture *texture = color_texture(slot)) {
+      srgb_ = (texture->format_flag_get() & GPU_FORMAT_SRGB) != 0;
+      break;
+    }
+  }
+  if (enabled_srgb_ != enabled_srgb && srgb_) {
+    /* The attachment views change. */
+    render_pass_end();
+  }
   enabled_srgb_ = enabled_srgb;
   Shader::set_framebuffer_srgb_target(enabled_srgb && srgb_);
 
@@ -112,7 +123,7 @@ uint32_t WGFrameBuffer::render_pass_ensure()
     }
     WGAttachment &color = cmd.color[slot];
     color.texture = texture->id_get();
-    color.view_format = texture->wg_format_get();
+    color.view_format = attachment_view_format(texture);
     color.mip = uint32_t(texture->view_mip_start() + attachment.mip);
     color.layer = uint32_t(texture->view_layer_start() + max_ii(attachment.layer, 0));
     color.load_op = color_load_ops_[slot];
@@ -175,6 +186,15 @@ void WGFrameBuffer::render_pass_end()
   pass_id_ = 0;
 }
 
+WGPUTextureFormat WGFrameBuffer::attachment_view_format(const WGTexture *texture) const
+{
+  /* Without sRGB, sRGB textures are written as is. */
+  if (!enabled_srgb_ && texture->wg_format_get() == WGPUTextureFormat_RGBA8UnormSrgb) {
+    return WGPUTextureFormat_RGBA8Unorm;
+  }
+  return texture->wg_format_get();
+}
+
 void WGFrameBuffer::subpass_transition_impl(const GPUAttachmentState /*depth_attachment_state*/,
                                             Span<GPUAttachmentState> color_attachment_states)
 {
@@ -200,7 +220,7 @@ void WGFrameBuffer::pipeline_formats_get(WGRenderPipelineKey &r_key) const
     if (texture == nullptr || !texture->is_usable() || (color_read_mask_ & (1u << slot))) {
       continue;
     }
-    r_key.color_formats[slot] = texture->wg_format_get();
+    r_key.color_formats[slot] = attachment_view_format(texture);
     r_key.color_len = slot + 1;
   }
   WGTexture *depth = depth_texture();

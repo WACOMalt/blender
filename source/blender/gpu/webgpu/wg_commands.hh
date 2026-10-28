@@ -86,6 +86,8 @@ struct WGCmdCreateTexture {
   uint32_t width, height, depth_or_layers;
   uint32_t mip_count;
   uint32_t sample_count;
+  /** Other format views can use (sRGB or not), #WGPUTextureFormat_Undefined when none. */
+  WGPUTextureFormat view_format;
 };
 
 struct WGCmdCreateSampler {

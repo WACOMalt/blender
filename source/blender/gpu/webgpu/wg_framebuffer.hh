@@ -106,6 +106,8 @@ class WGFrameBuffer : public FrameBuffer {
                      uint32_t stencil);
   bool scissor_covers_framebuffer() const;
   bool has_pending_clears() const;
+  /** Format of the attachment view of a color texture. */
+  WGPUTextureFormat attachment_view_format(const WGTexture *texture) const;
 };
 
 }  // namespace blender::gpu

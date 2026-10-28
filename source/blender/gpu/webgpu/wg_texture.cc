@@ -112,6 +112,15 @@ bool WGTexture::init_internal()
   /* WebGPU 1D textures can't have mip-maps. */
   cmd.mip_count = (type_ == GPU_TEXTURE_1D) ? 1 : max_ii(mipmaps_, 1);
   cmd.sample_count = 1;
+  /* Allow writing sRGB textures without conversion, and the opposite for views. */
+  if (wg_format_ == WGPUTextureFormat_RGBA8UnormSrgb) {
+    cmd.view_format = WGPUTextureFormat_RGBA8Unorm;
+  }
+  else if (wg_format_ == WGPUTextureFormat_RGBA8Unorm &&
+           (gpu_image_usage_flags_ & GPU_TEXTURE_USAGE_FORMAT_VIEW))
+  {
+    cmd.view_format = WGPUTextureFormat_RGBA8UnormSrgb;
+  }
   mipmaps_ = cmd.mip_count;
 
   WGRecord record;

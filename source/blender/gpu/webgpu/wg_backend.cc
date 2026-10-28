@@ -83,7 +83,8 @@ void WGBackend::capabilities_init()
   GCaps.vertex_pipeline_stores_and_atomics_support = false;
   GCaps.ray_query_support = false;
   GCaps.multi_viewport_support = false;
-  GCaps.srgb_write_view_support = true;
+  /* sRGB textures can't be storage textures, not even through views. */
+  GCaps.srgb_write_view_support = false;
   GCaps.hdr_viewport_support = false;
 
   GCaps.max_texture_size = int(min_uu(limits.maxTextureDimension2D, INT_MAX));

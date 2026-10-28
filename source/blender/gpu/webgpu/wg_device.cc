@@ -862,6 +862,10 @@ void WGDevice::execute(WGCommandStream &stream, void *wait_ctx)
         desc.format = cmd.format;
         desc.mipLevelCount = cmd.mip_count;
         desc.sampleCount = cmd.sample_count;
+        if (cmd.view_format != WGPUTextureFormat_Undefined) {
+          desc.viewFormatCount = 1;
+          desc.viewFormats = &cmd.view_format;
+        }
         TextureEntry entry;
         entry.texture = wgpuDeviceCreateTexture(device_, &desc);
         entry.format = cmd.format;

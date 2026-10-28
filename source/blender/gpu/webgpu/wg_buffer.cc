@@ -414,7 +414,12 @@ WGBufferBinding WGUniformBuf::binding_ensure(WGCommandStream &stream,
     if (data_ == nullptr) {
       clear_to_zero();
     }
-    uploaded_offset_ = stream.staging_push(data_, size_in_bytes_);
+    /* Bindings of uniform buffers are rounded up to 16 bytes, keep the padding in the stream. */
+    const size_t binding_size = WGCommandStream::align_up(size_in_bytes_, 16);
+    uploaded_offset_ = stream.staging_alloc(binding_size);
+    uint8_t *dst = stream.staging.data() + uploaded_offset_;
+    memcpy(dst, data_, size_in_bytes_);
+    memset(dst + size_in_bytes_, 0, binding_size - size_in_bytes_);
     uploaded_generation_ = stream_generation;
   }
   return {WG_STREAM_DATA_ID, uploaded_offset_, WGCommandStream::align_up(size_in_bytes_, 16)};
