@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include "BLI_math_base.hh"
+
 #include "gpu_texture_private.hh"
 
 #include "wg_commands.hh"
@@ -22,6 +24,8 @@ class WGTexture : public Texture {
   WGPUTextureFormat wg_format_ = WGPUTextureFormat_Undefined;
   /** Not supported by WebGPU (e.g. buffer textures). */
   bool is_unsupported_ = false;
+  /** First mip level of the WebGPU texture used by this texture view. */
+  int view_mip_start_ = 0;
 
  public:
   WGTexture(const char *name) : Texture(name) {}
@@ -43,6 +47,13 @@ class WGTexture : public Texture {
                   eGPUDataFormat format,
                   GPUPixelBuffer *pixbuf) override;
 
+  /** Read a region of a mip level, `offset[2]` is the layer (or depth for 3D textures). */
+  void read_region(int mip,
+                   const uint32_t offset[3],
+                   const uint32_t extent[3],
+                   eGPUDataFormat format,
+                   void *r_data);
+
   WGObjectID id_get() const
   {
     return id_;
@@ -58,11 +69,18 @@ class WGTexture : public Texture {
   /** First mip and layer of the WebGPU texture used by this texture (non zero for views). */
   int view_mip_start() const
   {
-    return mip_min_;
+    return view_mip_start_;
   }
   int view_layer_start() const
   {
     return view_layer_start_;
+  }
+  /** Mip levels used when sampling (see #GPU_texture_mip_range_set). */
+  IndexRange sampling_mips() const
+  {
+    const int start = view_mip_start_ + min_ii(mip_min_, mipmaps_ - 1);
+    const int end = view_mip_start_ + min_ii(mip_max_, mipmaps_ - 1);
+    return IndexRange(start, max_ii(end - start + 1, 1));
   }
   bool is_usable() const
   {

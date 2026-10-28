@@ -63,6 +63,8 @@ enum class WGCommandType : uint32_t {
   EndRenderPass,
   Draw,
   Dispatch,
+  ClearAttachments,
+  Present,
 };
 
 /* -------------------------------------------------------------------- */
@@ -93,6 +95,7 @@ struct WGCmdCreateSampler {
   WGPUMipmapFilterMode mipmap_filter;
   WGPUCompareFunction compare;
   uint16_t max_anisotropy;
+  float lod_max;
 };
 
 /** Trailing data: WGSL source (null terminated). */
@@ -109,6 +112,7 @@ struct WGBindingLayout {
     Texture,
     StorageTexture,
     Sampler,
+    NonFilteringSampler,
     ComparisonSampler,
   };
   uint32_t binding;
@@ -152,12 +156,18 @@ struct WGColorTarget {
   WGPUBlendComponent blend_alpha;
 };
 
+/** Value of a WGSL override (specialization constant), keyed by its id. */
+struct WGPipelineConstant {
+  uint32_t id;
+  double value;
+};
+
 constexpr int WG_MAX_COLOR_TARGETS = 8;
 constexpr int WG_MAX_VERTEX_BUFFERS = 16;
 
 /**
  * Trailing data: `vertex_buffers_len` #WGVertexBufferLayout, then `attributes_len`
- * #WGVertexAttribute.
+ * #WGVertexAttribute, then `constants_len` #WGPipelineConstant.
  */
 struct WGCmdCreateRenderPipeline {
   WGObjectID pipeline;
@@ -183,12 +193,15 @@ struct WGCmdCreateRenderPipeline {
   uint32_t sample_count;
   uint32_t vertex_buffers_len;
   uint32_t attributes_len;
+  uint32_t constants_len;
 };
 
+/** Trailing data: `constants_len` #WGPipelineConstant. */
 struct WGCmdCreateComputePipeline {
   WGObjectID pipeline;
   WGObjectID layout;
   WGObjectID module;
+  uint32_t constants_len;
 };
 
 struct WGCmdDestroy {
@@ -338,6 +351,29 @@ struct WGCmdDispatch {
   WGObjectID indirect_buffer;
   uint64_t indirect_offset;
   uint32_t resources_len;
+};
+
+/**
+ * Clear attachments of a render pass by drawing, for clears limited to the scissor or happening
+ * after draws in the pass. The stream data at `data_offset` contains the clear values: 8 color
+ * values as 4 32 bit floats, signed or unsigned integers matching the attachment format, then the
+ * depth as float (#WG_CLEAR_DATA_SIZE bytes).
+ */
+struct WGCmdClearAttachments {
+  uint32_t pass_id;
+  uint32_t color_mask;
+  bool clear_depth;
+  bool clear_stencil;
+  uint32_t stencil;
+  uint32_t scissor[4];
+  uint64_t data_offset;
+};
+
+constexpr uint32_t WG_CLEAR_DATA_SIZE = 8 * 16 + 16;
+
+/** Copy a texture to the canvas, flipping it vertically (see `wg_shader.hh`). */
+struct WGCmdPresent {
+  WGObjectID texture;
 };
 
 /** \} */

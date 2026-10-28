@@ -296,6 +296,15 @@ void WGUniformBuf::clear_to_zero()
   uploaded_generation_ = 0;
 }
 
+void WGUniformBuf::host_data_set(const void *data, const size_t size)
+{
+  if (size != size_t(size_in_bytes_)) {
+    MEM_SAFE_DELETE_VOID(data_);
+    size_in_bytes_ = size;
+  }
+  update(data);
+}
+
 WGBufferBinding WGUniformBuf::binding_ensure(WGCommandStream &stream,
                                              const uint64_t stream_generation)
 {

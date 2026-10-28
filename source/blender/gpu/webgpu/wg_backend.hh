@@ -14,11 +14,18 @@
 
 #pragma once
 
+#include <mutex>
+
+#include "BLI_map.hh"
+
+#include "GPU_texture.hh"
 #include "gpu_backend.hh"
 
 #include "wg_device.hh"
 
 namespace blender::gpu {
+
+constexpr uint64_t WG_DUMMY_BUFFER_SIZE = 65536;
 
 class WGBackend : public GPUBackend {
  public:
@@ -61,6 +68,23 @@ class WGBackend : public GPUBackend {
 
   void shader_cache_dir_clear_old() override {}
 
+  /** A texture bound in place of missing textures, its contents are zero. */
+  struct DummyTexture {
+    WGObjectID texture = WG_NULL_ID;
+    WGPUTextureFormat format = WGPUTextureFormat_Undefined;
+  };
+  /**
+   * Get a texture for shader bindings without bound texture.
+   * `storage_format` is the format of storage textures, #WGPUTextureFormat_Undefined otherwise.
+   */
+  DummyTexture dummy_texture_get(WGPUTextureViewDimension dimension,
+                                 WGPUTextureSampleType sample_type,
+                                 WGPUTextureFormat storage_format);
+  /** A buffer filled with zeros of #WG_DUMMY_BUFFER_SIZE bytes. */
+  WGObjectID dummy_buffer_get();
+  /** Sampler for the given state, `kind` is the sampler kind of the shader binding. */
+  WGObjectID sampler_get(GPUSamplerState state, WGBindingLayout::Kind kind);
+
   void render_begin() override {}
   void render_end() override {}
   void render_step(bool force_resource_release) override;
@@ -68,6 +92,11 @@ class WGBackend : public GPUBackend {
  private:
   void capabilities_init();
   void platform_init();
+
+  std::mutex resources_mutex_;
+  Map<uint64_t, DummyTexture> dummy_textures_;
+  Map<uint64_t, WGObjectID> samplers_;
+  WGObjectID dummy_buffer_ = WG_NULL_ID;
 };
 
 }  // namespace blender::gpu

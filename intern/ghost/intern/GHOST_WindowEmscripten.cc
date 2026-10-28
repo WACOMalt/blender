@@ -8,6 +8,9 @@
 
 #include "GHOST_WindowEmscripten.hh"
 #include "GHOST_ContextNone.hh"
+#ifdef WITH_WEBGPU_BACKEND
+#  include "GHOST_ContextWebGPU.hh"
+#endif
 #include "GHOST_SystemEmscripten.hh"
 
 #include <cmath>
@@ -45,8 +48,17 @@ GHOST_Context *GHOST_WindowEmscripten::newDrawingContext(GHOST_TDrawingContextTy
       delete context;
       return nullptr;
     }
+#ifdef WITH_WEBGPU_BACKEND
+    case GHOST_kDrawingContextTypeWebGPU: {
+      GHOST_Context *context = new GHOST_ContextWebGPU(want_context_params_);
+      if (context->initializeDrawingContext()) {
+        return context;
+      }
+      delete context;
+      return nullptr;
+    }
+#endif
     default:
-      /* GPU backends for the web (WebGPU, WebGL2) are not yet implemented. */
       return nullptr;
   }
 }

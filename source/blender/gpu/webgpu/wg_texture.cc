@@ -135,8 +135,10 @@ bool WGTexture::init_internal(gpu::Texture *src, bool /*use_stencil*/)
   device_format_ = wg_device_format(format_);
   wg_format_ = wg_texture_format(device_format_);
   /* Views are relative to the source texture, which may itself be a view. */
-  mip_min_ += source->mip_min_;
-  mip_max_ += source->mip_min_;
+  /* Mip levels of views are relative to the view, like for other textures. */
+  view_mip_start_ = source->view_mip_start_ + mip_min_;
+  mip_max_ -= mip_min_;
+  mip_min_ = 0;
   view_layer_start_ += source->view_layer_start_;
   return true;
 }
@@ -208,7 +210,7 @@ void WGTexture::update_sub(int mip,
   cmd.staging_offset = staging_offset;
   cmd.bytes_per_row = uint32_t(padded_row_size);
   cmd.rows_per_image = rows_per_slice;
-  cmd.mip = uint32_t(mip_min_ + mip);
+  cmd.mip = uint32_t(view_mip_start_ + mip);
   for (int i = 0; i < 3; i++) {
     cmd.offset[i] = dst_offset[i];
     cmd.extent[i] = copy_extent[i];
@@ -235,9 +237,22 @@ void WGTexture::read(int mip, eGPUDataFormat format, void *r_data)
     return;
   }
   uint32_t extent[3];
-  wg_mip_extent(mip_min_ + mip, extent);
+  wg_mip_extent(mip, extent);
   if (type_ != GPU_TEXTURE_3D) {
     extent[2] = layer_count();
+  }
+  const uint32_t offset[3] = {0, 0, uint32_t((type_ == GPU_TEXTURE_3D) ? 0 : view_layer_start_)};
+  read_region(mip, offset, extent, format, r_data);
+}
+
+void WGTexture::read_region(const int mip,
+                            const uint32_t offset[3],
+                            const uint32_t extent[3],
+                            const eGPUDataFormat format,
+                            void *r_data)
+{
+  if (!is_usable()) {
+    return;
   }
   const size_t texel_size = to_bytesize(device_format_);
   const size_t pixels = size_t(extent[0]) * extent[1] * extent[2];
@@ -245,9 +260,9 @@ void WGTexture::read(int mip, eGPUDataFormat format, void *r_data)
 
   WGCmdReadTexture cmd = {};
   cmd.texture = id_;
-  cmd.mip = uint32_t(mip_min_ + mip);
-  cmd.offset[2] = (type_ == GPU_TEXTURE_3D) ? 0 : view_layer_start_;
+  cmd.mip = uint32_t(view_mip_start_ + mip);
   for (int i = 0; i < 3; i++) {
+    cmd.offset[i] = offset[i];
     cmd.extent[i] = extent[i];
   }
   cmd.texel_size = uint32_t(texel_size);
@@ -277,11 +292,11 @@ void WGTexture::copy_to(Texture *dst, IndexRange mip_levels)
     WGCmdCopyTextureToTexture cmd = {};
     cmd.src = id_;
     cmd.dst = dst_texture->id_;
-    cmd.src_mip = uint32_t(mip_min_ + mip);
-    cmd.dst_mip = uint32_t(dst_texture->mip_min_ + mip);
+    cmd.src_mip = uint32_t(view_mip_start_ + mip);
+    cmd.dst_mip = uint32_t(dst_texture->view_mip_start_ + mip);
     cmd.src_offset[2] = (type_ == GPU_TEXTURE_3D) ? 0 : view_layer_start_;
     cmd.dst_offset[2] = (type_ == GPU_TEXTURE_3D) ? 0 : dst_texture->view_layer_start_;
-    wg_mip_extent(cmd.src_mip, cmd.extent);
+    wg_mip_extent(mip, cmd.extent);
     if (type_ != GPU_TEXTURE_3D) {
       cmd.extent[2] = layer_count();
     }

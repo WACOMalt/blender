@@ -378,6 +378,7 @@ WGPUBindGroup WGDevice::bind_group_create(WGObjectID pipeline_layout,
                                              state);
         break;
       case WGBindingLayout::Kind::Sampler:
+      case WGBindingLayout::Kind::NonFilteringSampler:
       case WGBindingLayout::Kind::ComparisonSampler:
         entry.sampler = samplers_.lookup_default(resource.object, nullptr);
         break;
@@ -401,6 +402,16 @@ static void wg_end_render_pass(WGPURenderPassEncoder &render_pass, uint32_t &ren
     render_pass = nullptr;
   }
   render_pass_id = 0;
+}
+
+static bool wg_render_pass_has_clear(const WGCmdBeginRenderPass &pass)
+{
+  bool has_clear = pass.depth.load_op == WGPULoadOp_Clear ||
+                   pass.stencil_load_op == WGPULoadOp_Clear;
+  for (uint32_t i = 0; i < pass.color_len; i++) {
+    has_clear |= pass.color[i].load_op == WGPULoadOp_Clear;
+  }
+  return has_clear;
 }
 
 bool WGDevice::render_pass_activate(const uint32_t pass_id, ExecuteState &state)
@@ -580,6 +591,25 @@ void WGDevice::execute_dispatch(const WGCmdDispatch &cmd,
   wgpuComputePassEncoderRelease(pass);
 }
 
+/** WebGPU constant entries of #WGPipelineConstant, keys are the override ids. */
+struct WGPipelineConstants {
+  Vector<std::string, 8> keys;
+  Vector<WGPUConstantEntry, 8> entries;
+
+  WGPipelineConstants(const WGPipelineConstant *constants, const uint32_t constants_len)
+  {
+    for (const WGPipelineConstant &constant : Span(constants, constants_len)) {
+      keys.append(std::to_string(constant.id));
+    }
+    for (const int i : IndexRange(constants_len)) {
+      WGPUConstantEntry entry = {};
+      entry.key = {keys[i].c_str(), keys[i].size()};
+      entry.value = constants[i].value;
+      entries.append(entry);
+    }
+  }
+};
+
 void WGDevice::execute_create_render_pipeline(const WGCmdCreateRenderPipeline &cmd,
                                               const uint8_t *trailing)
 {
@@ -594,6 +624,10 @@ void WGDevice::execute_create_render_pipeline(const WGCmdCreateRenderPipeline &c
       trailing);
   const WGVertexAttribute *attributes = reinterpret_cast<const WGVertexAttribute *>(
       trailing + sizeof(WGVertexBufferLayout) * cmd.vertex_buffers_len);
+  const WGPipelineConstant *constants = reinterpret_cast<const WGPipelineConstant *>(
+      trailing + sizeof(WGVertexBufferLayout) * cmd.vertex_buffers_len +
+      sizeof(WGVertexAttribute) * cmd.attributes_len);
+  WGPipelineConstants pipeline_constants(constants, cmd.constants_len);
 
   Vector<WGPUVertexAttribute, 16> wgpu_attributes;
   for (const WGVertexAttribute &attribute : Span(attributes, cmd.attributes_len)) {
@@ -617,6 +651,8 @@ void WGDevice::execute_create_render_pipeline(const WGCmdCreateRenderPipeline &c
   desc.layout = layout->layout;
   desc.vertex.module = vertex_module;
   desc.vertex.entryPoint = wg_string("main");
+  desc.vertex.constantCount = pipeline_constants.entries.size();
+  desc.vertex.constants = pipeline_constants.entries.data();
   desc.vertex.bufferCount = wgpu_buffers.size();
   desc.vertex.buffers = wgpu_buffers.data();
   desc.primitive.topology = cmd.topology;
@@ -657,6 +693,8 @@ void WGDevice::execute_create_render_pipeline(const WGCmdCreateRenderPipeline &c
     }
     fragment.module = fragment_module;
     fragment.entryPoint = wg_string("main");
+    fragment.constantCount = pipeline_constants.entries.size();
+    fragment.constants = pipeline_constants.entries.data();
     fragment.targetCount = cmd.color_targets_len;
     fragment.targets = targets;
     desc.fragment = &fragment;
@@ -720,6 +758,9 @@ static WGPUBindGroupLayoutEntry wg_bind_group_layout_entry(const WGBindingLayout
       break;
     case WGBindingLayout::Kind::Sampler:
       entry.sampler.type = WGPUSamplerBindingType_Filtering;
+      break;
+    case WGBindingLayout::Kind::NonFilteringSampler:
+      entry.sampler.type = WGPUSamplerBindingType_NonFiltering;
       break;
     case WGBindingLayout::Kind::ComparisonSampler:
       entry.sampler.type = WGPUSamplerBindingType_Comparison;
@@ -827,6 +868,9 @@ void WGDevice::execute(WGCommandStream &stream, void *wait_ctx)
         entry.dimension = cmd.dimension;
         entry.mip_count = cmd.mip_count;
         entry.layers = cmd.depth_or_layers;
+        entry.width = cmd.width;
+        entry.height = cmd.height;
+        entry.sample_count = cmd.sample_count;
         textures_.add_overwrite(cmd.texture, entry);
         break;
       }
@@ -840,7 +884,7 @@ void WGDevice::execute(WGCommandStream &stream, void *wait_ctx)
         desc.minFilter = cmd.min_filter;
         desc.mipmapFilter = cmd.mipmap_filter;
         desc.lodMinClamp = 0.0f;
-        desc.lodMaxClamp = 32.0f;
+        desc.lodMaxClamp = cmd.lod_max;
         desc.compare = cmd.compare;
         desc.maxAnisotropy = std::max<uint16_t>(cmd.max_anisotropy, 1);
         samplers_.add_overwrite(cmd.sampler, wgpuDeviceCreateSampler(device_, &desc));
@@ -901,6 +945,11 @@ void WGDevice::execute(WGCommandStream &stream, void *wait_ctx)
           desc.layout = layout->layout;
           desc.compute.module = module;
           desc.compute.entryPoint = wg_string("main");
+          WGPipelineConstants pipeline_constants(
+              reinterpret_cast<const WGPipelineConstant *>(TRAILING(WGCmdCreateComputePipeline)),
+              cmd.constants_len);
+          desc.compute.constantCount = pipeline_constants.entries.size();
+          desc.compute.constants = pipeline_constants.entries.data();
           compute_pipelines_.add_overwrite(cmd.pipeline,
                                            wgpuDeviceCreateComputePipeline(device_, &desc));
         }
@@ -1031,21 +1080,14 @@ void WGDevice::execute(WGCommandStream &stream, void *wait_ctx)
       case WGCommandType::BeginRenderPass: {
         const WGCmdBeginRenderPass &cmd = CMD(WGCmdBeginRenderPass);
         render_passes_.add_overwrite(cmd.pass_id, cmd);
+        /* Clear right away, keeping the order with other commands using the attachments. */
+        if (wg_render_pass_has_clear(cmd)) {
+          render_pass_activate(cmd.pass_id, state);
+        }
         break;
       }
       case WGCommandType::EndRenderPass: {
         const WGCmdEndRenderPass &cmd = CMD(WGCmdEndRenderPass);
-        /* A pass that was never drawn in still needs its clears. */
-        if (const WGCmdBeginRenderPass *pass = render_passes_.lookup_ptr(cmd.pass_id)) {
-          bool has_clear = pass->depth.load_op == WGPULoadOp_Clear ||
-                           pass->stencil_load_op == WGPULoadOp_Clear;
-          for (uint32_t i = 0; i < pass->color_len; i++) {
-            has_clear |= pass->color[i].load_op == WGPULoadOp_Clear;
-          }
-          if (has_clear) {
-            render_pass_activate(cmd.pass_id, state);
-          }
-        }
         if (state.render_pass_id == cmd.pass_id) {
           wg_end_render_pass(state.render_pass, state.render_pass_id);
         }
@@ -1058,6 +1100,14 @@ void WGDevice::execute(WGCommandStream &stream, void *wait_ctx)
       }
       case WGCommandType::Dispatch: {
         execute_dispatch(CMD(WGCmdDispatch), TRAILING(WGCmdDispatch), state);
+        break;
+      }
+      case WGCommandType::ClearAttachments: {
+        execute_clear_attachments(CMD(WGCmdClearAttachments), state);
+        break;
+      }
+      case WGCommandType::Present: {
+        execute_present(CMD(WGCmdPresent), state);
         break;
       }
     }
@@ -1108,6 +1158,268 @@ void WGDevice::execute(WGCommandStream &stream, void *wait_ctx)
     callback.userdata2 = &read;
     wgpuBufferMapAsync(read.buffer, WGPUMapMode_Read, 0, read.size, callback);
   }
+}
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Internal Draws
+ * \{ */
+
+WGPUShaderModule WGDevice::shader_module_create(const std::string &wgsl)
+{
+  WGPUShaderSourceWGSL source = {};
+  source.chain.sType = WGPUSType_ShaderSourceWGSL;
+  source.code = {wgsl.c_str(), wgsl.size()};
+  WGPUShaderModuleDescriptor desc = {};
+  desc.nextInChain = &source.chain;
+  return wgpuDeviceCreateShaderModule(device_, &desc);
+}
+
+static const char *WG_FULLSCREEN_VERTEX_WGSL =
+    "fn wg_fullscreen_position(i : u32) -> vec2<f32> {\n"
+    "  return vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u)) * 2.0 - 1.0;\n"
+    "}\n";
+
+static const char *wg_wgsl_component_type(const WGPUTextureFormat format)
+{
+  switch (format) {
+    case WGPUTextureFormat_R8Uint:
+    case WGPUTextureFormat_R16Uint:
+    case WGPUTextureFormat_RG8Uint:
+    case WGPUTextureFormat_R32Uint:
+    case WGPUTextureFormat_RG16Uint:
+    case WGPUTextureFormat_RGBA8Uint:
+    case WGPUTextureFormat_RGB10A2Uint:
+    case WGPUTextureFormat_RG32Uint:
+    case WGPUTextureFormat_RGBA16Uint:
+    case WGPUTextureFormat_RGBA32Uint:
+      return "u32";
+    case WGPUTextureFormat_R8Sint:
+    case WGPUTextureFormat_R16Sint:
+    case WGPUTextureFormat_RG8Sint:
+    case WGPUTextureFormat_R32Sint:
+    case WGPUTextureFormat_RG16Sint:
+    case WGPUTextureFormat_RGBA8Sint:
+    case WGPUTextureFormat_RG32Sint:
+    case WGPUTextureFormat_RGBA16Sint:
+    case WGPUTextureFormat_RGBA32Sint:
+      return "i32";
+    default:
+      return "f32";
+  }
+}
+
+void WGDevice::execute_clear_attachments(const WGCmdClearAttachments &cmd, ExecuteState &state)
+{
+  if (!render_pass_activate(cmd.pass_id, state)) {
+    return;
+  }
+  const WGCmdBeginRenderPass &pass = render_passes_.lookup(cmd.pass_id);
+
+  /* Size and sample count of the attachments. */
+  const WGAttachment *first = pass.depth.texture != WG_NULL_ID ? &pass.depth : nullptr;
+  for (uint32_t i = 0; i < pass.color_len && first == nullptr; i++) {
+    if (pass.color[i].texture != WG_NULL_ID) {
+      first = &pass.color[i];
+    }
+  }
+  const TextureEntry *texture = first ? textures_.lookup_ptr(first->texture) : nullptr;
+  if (texture == nullptr) {
+    return;
+  }
+  const uint32_t width = std::max(texture->width >> first->mip, 1u);
+  const uint32_t height = std::max(texture->height >> first->mip, 1u);
+
+  const bool has_depth = pass.depth.texture != WG_NULL_ID;
+  std::string key = std::to_string(cmd.color_mask) + ":" + std::to_string(cmd.clear_depth) +
+                    std::to_string(cmd.clear_stencil) + std::to_string(pass.has_stencil) + ":" +
+                    std::to_string(texture->sample_count) + ":" +
+                    std::to_string(has_depth ? pass.depth.view_format : 0);
+  for (uint32_t i = 0; i < pass.color_len; i++) {
+    key += ":" + std::to_string(pass.color[i].texture ? pass.color[i].view_format : 0);
+  }
+
+  WGPURenderPipeline pipeline = clear_pipelines_.lookup_default(key, nullptr);
+  if (pipeline == nullptr) {
+    std::string wgsl = WG_FULLSCREEN_VERTEX_WGSL;
+    wgsl += "struct Values { colors : array<vec4<u32>, 8>, depth : vec4<f32> };\n";
+    wgsl += "@group(0) @binding(0) var<uniform> values : Values;\n";
+    wgsl += "@vertex fn vs(@builtin(vertex_index) i : u32) -> @builtin(position) vec4<f32> {\n";
+    wgsl += "  return vec4<f32>(wg_fullscreen_position(i), values.depth.x, 1.0);\n";
+    wgsl += "}\n";
+    std::string outputs;
+    std::string body;
+    for (uint32_t i = 0; i < pass.color_len; i++) {
+      if (pass.color[i].texture == WG_NULL_ID || !(cmd.color_mask & (1u << i))) {
+        continue;
+      }
+      const std::string type = std::string("vec4<") +
+                               wg_wgsl_component_type(pass.color[i].view_format) + ">";
+      const std::string index = std::to_string(i);
+      outputs += "  @location(" + index + ") c" + index + " : " + type + ",\n";
+      body += "  o.c" + index + " = bitcast<" + type + ">(values.colors[" + index + "]);\n";
+    }
+    if (outputs.empty()) {
+      wgsl += "@fragment fn fs() {\n  _ = values.colors[0];\n}\n";
+    }
+    else {
+      wgsl += "struct Out {\n" + outputs + "};\n";
+      wgsl += "@fragment fn fs() -> Out {\n  var o : Out;\n" + body + "  return o;\n}\n";
+    }
+    WGPUShaderModule module = shader_module_create(wgsl);
+
+    WGPUColorTargetState targets[WG_MAX_COLOR_TARGETS] = {};
+    for (uint32_t i = 0; i < pass.color_len; i++) {
+      targets[i].format = pass.color[i].texture ? pass.color[i].view_format :
+                                                  WGPUTextureFormat_Undefined;
+      targets[i].writeMask = (pass.color[i].texture && (cmd.color_mask & (1u << i))) ?
+                                 WGPUColorWriteMask_All :
+                                 WGPUColorWriteMask_None;
+    }
+    WGPUFragmentState fragment = {};
+    fragment.module = module;
+    fragment.entryPoint = wg_string("fs");
+    fragment.targetCount = pass.color_len;
+    fragment.targets = targets;
+
+    WGPUDepthStencilState depth_stencil = {};
+    WGPURenderPipelineDescriptor desc = {};
+    if (has_depth) {
+      depth_stencil.format = pass.depth.view_format;
+      depth_stencil.depthWriteEnabled = cmd.clear_depth ? WGPUOptionalBool_True :
+                                                          WGPUOptionalBool_False;
+      depth_stencil.depthCompare = WGPUCompareFunction_Always;
+      WGPUStencilFaceState face = {};
+      face.compare = WGPUCompareFunction_Always;
+      face.failOp = WGPUStencilOperation_Keep;
+      face.depthFailOp = WGPUStencilOperation_Keep;
+      face.passOp = cmd.clear_stencil ? WGPUStencilOperation_Replace :
+                                        WGPUStencilOperation_Keep;
+      depth_stencil.stencilFront = face;
+      depth_stencil.stencilBack = face;
+      depth_stencil.stencilReadMask = 0xFF;
+      depth_stencil.stencilWriteMask = (pass.has_stencil && cmd.clear_stencil) ? 0xFF : 0;
+      desc.depthStencil = &depth_stencil;
+    }
+    desc.vertex.module = module;
+    desc.vertex.entryPoint = wg_string("vs");
+    desc.primitive.topology = WGPUPrimitiveTopology_TriangleList;
+    desc.multisample.count = texture->sample_count;
+    desc.multisample.mask = 0xFFFFFFFFu;
+    desc.fragment = &fragment;
+    pipeline = wgpuDeviceCreateRenderPipeline(device_, &desc);
+    wgpuShaderModuleRelease(module);
+    clear_pipelines_.add(key, pipeline);
+  }
+
+  WGPUBindGroupEntry entry = {};
+  entry.binding = 0;
+  entry.buffer = state.staging;
+  entry.offset = cmd.data_offset;
+  entry.size = WG_CLEAR_DATA_SIZE;
+  WGPUBindGroupDescriptor bind_group_desc = {};
+  WGPUBindGroupLayout layout = wgpuRenderPipelineGetBindGroupLayout(pipeline, 0);
+  bind_group_desc.layout = layout;
+  bind_group_desc.entryCount = 1;
+  bind_group_desc.entries = &entry;
+  WGPUBindGroup bind_group = wgpuDeviceCreateBindGroup(device_, &bind_group_desc);
+  wgpuBindGroupLayoutRelease(layout);
+  state.bind_groups.append(bind_group);
+
+  const uint32_t x = std::min(cmd.scissor[0], width);
+  const uint32_t y = std::min(cmd.scissor[1], height);
+  WGPURenderPassEncoder render_pass = state.render_pass;
+  wgpuRenderPassEncoderSetPipeline(render_pass, pipeline);
+  wgpuRenderPassEncoderSetBindGroup(render_pass, 0, bind_group, 0, nullptr);
+  wgpuRenderPassEncoderSetViewport(render_pass, 0, 0, width, height, 0.0f, 1.0f);
+  wgpuRenderPassEncoderSetScissorRect(render_pass,
+                                      x,
+                                      y,
+                                      std::min(cmd.scissor[2], width - x),
+                                      std::min(cmd.scissor[3], height - y));
+  wgpuRenderPassEncoderSetStencilReference(render_pass, cmd.stencil);
+  wgpuRenderPassEncoderDraw(render_pass, 3, 1, 0, 0);
+}
+
+void WGDevice::execute_present(const WGCmdPresent &cmd, ExecuteState &state)
+{
+  const TextureEntry *source = textures_.lookup_ptr(cmd.texture);
+  WGPUTexture surface = texture_get(WG_SURFACE_TEXTURE_ID, state);
+  if (source == nullptr || surface == nullptr) {
+    return;
+  }
+  wg_end_render_pass(state.render_pass, state.render_pass_id);
+
+  if (present_pipeline_ == nullptr) {
+    std::string wgsl = WG_FULLSCREEN_VERTEX_WGSL;
+    wgsl += "@group(0) @binding(0) var source : texture_2d<f32>;\n";
+    wgsl += "@vertex fn vs(@builtin(vertex_index) i : u32) -> @builtin(position) vec4<f32> {\n";
+    wgsl += "  return vec4<f32>(wg_fullscreen_position(i), 0.0, 1.0);\n";
+    wgsl += "}\n";
+    wgsl += "@fragment fn fs(@builtin(position) p : vec4<f32>) -> @location(0) vec4<f32> {\n";
+    wgsl += "  let size = vec2<i32>(textureDimensions(source));\n";
+    wgsl += "  let co = vec2<i32>(i32(p.x), size.y - 1 - i32(p.y));\n";
+    wgsl += "  let color = textureLoad(source, clamp(co, vec2<i32>(0), size - 1), 0);\n";
+    wgsl += "  return vec4<f32>(color.rgb, 1.0);\n";
+    wgsl += "}\n";
+    WGPUShaderModule module = shader_module_create(wgsl);
+    WGPUColorTargetState target = {};
+    target.format = surface_format_;
+    target.writeMask = WGPUColorWriteMask_All;
+    WGPUFragmentState fragment = {};
+    fragment.module = module;
+    fragment.entryPoint = wg_string("fs");
+    fragment.targetCount = 1;
+    fragment.targets = &target;
+    WGPURenderPipelineDescriptor desc = {};
+    desc.vertex.module = module;
+    desc.vertex.entryPoint = wg_string("vs");
+    desc.primitive.topology = WGPUPrimitiveTopology_TriangleList;
+    desc.multisample.count = 1;
+    desc.multisample.mask = 0xFFFFFFFFu;
+    desc.fragment = &fragment;
+    present_pipeline_ = wgpuDeviceCreateRenderPipeline(device_, &desc);
+    wgpuShaderModuleRelease(module);
+  }
+
+  WGPUTextureView source_view = texture_view_get(cmd.texture,
+                                                 WGPUTextureViewDimension_2D,
+                                                 source->format,
+                                                 WGPUTextureAspect_All,
+                                                 0,
+                                                 1,
+                                                 0,
+                                                 1,
+                                                 state);
+  WGPUBindGroupEntry entry = {};
+  entry.binding = 0;
+  entry.textureView = source_view;
+  WGPUBindGroupLayout layout = wgpuRenderPipelineGetBindGroupLayout(present_pipeline_, 0);
+  WGPUBindGroupDescriptor bind_group_desc = {};
+  bind_group_desc.layout = layout;
+  bind_group_desc.entryCount = 1;
+  bind_group_desc.entries = &entry;
+  WGPUBindGroup bind_group = wgpuDeviceCreateBindGroup(device_, &bind_group_desc);
+  wgpuBindGroupLayoutRelease(layout);
+  state.bind_groups.append(bind_group);
+
+  WGPUTextureView surface_view = wgpuTextureCreateView(surface, nullptr);
+  state.views.append(surface_view);
+  WGPURenderPassColorAttachment color = {};
+  color.view = surface_view;
+  color.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+  color.loadOp = WGPULoadOp_Clear;
+  color.storeOp = WGPUStoreOp_Store;
+  WGPURenderPassDescriptor pass_desc = {};
+  pass_desc.colorAttachmentCount = 1;
+  pass_desc.colorAttachments = &color;
+  WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(state.encoder, &pass_desc);
+  wgpuRenderPassEncoderSetPipeline(pass, present_pipeline_);
+  wgpuRenderPassEncoderSetBindGroup(pass, 0, bind_group, 0, nullptr);
+  wgpuRenderPassEncoderDraw(pass, 3, 1, 0, 0);
+  wgpuRenderPassEncoderEnd(pass);
+  wgpuRenderPassEncoderRelease(pass);
 }
 
 /** \} */

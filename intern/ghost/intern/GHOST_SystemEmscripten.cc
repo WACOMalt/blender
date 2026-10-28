@@ -610,7 +610,7 @@ GHOST_TSuccess GHOST_SystemEmscripten::setCursorPosition(int32_t /*x*/, int32_t 
 
 GHOST_IContext *GHOST_SystemEmscripten::createOffscreenContext(GHOST_GPUSettings gpu_settings)
 {
-  /* GPU contexts are provided by the WebGPU backend, not yet implemented. */
+  /* WebGPU is used directly by the GPU module, contexts have nothing to set up. */
   const GHOST_ContextParams context_params = GHOST_CONTEXT_PARAMS_FROM_GPU_SETTINGS_OFFSCREEN(
       gpu_settings);
   GHOST_Context *context = new GHOST_ContextNone(context_params);

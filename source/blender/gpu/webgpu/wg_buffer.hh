@@ -115,6 +115,9 @@ class WGUniformBuf : public UniformBuf {
   void bind_as_ssbo(int slot) override;
   void unbind() override;
 
+  /** Replace the data and size of the buffer. */
+  void host_data_set(const void *data, size_t size);
+
   /** Copy the data to the current stream when needed, must be called with the recorder locked. */
   WGBufferBinding binding_ensure(WGCommandStream &stream, uint64_t stream_generation);
 };

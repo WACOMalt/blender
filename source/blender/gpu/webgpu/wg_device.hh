@@ -83,6 +83,8 @@ class WGDevice {
     WGPUTextureDimension dimension = WGPUTextureDimension_2D;
     uint32_t mip_count = 1;
     uint32_t layers = 1;
+    uint32_t width = 1, height = 1;
+    uint32_t sample_count = 1;
   };
 
   struct ExecuteState;
@@ -109,6 +111,9 @@ class WGDevice {
   bool render_pass_activate(uint32_t pass_id, ExecuteState &state);
   void execute_draw(const WGCmdDraw &cmd, const uint8_t *trailing, ExecuteState &state);
   void execute_dispatch(const WGCmdDispatch &cmd, const uint8_t *trailing, ExecuteState &state);
+  void execute_clear_attachments(const WGCmdClearAttachments &cmd, ExecuteState &state);
+  void execute_present(const WGCmdPresent &cmd, ExecuteState &state);
+  WGPUShaderModule shader_module_create(const std::string &wgsl);
   void destroy_object(WGObjectID id);
 
   bool initialized_ = false;
@@ -141,6 +146,10 @@ class WGDevice {
   Map<WGObjectID, PipelineLayoutEntry> pipeline_layouts_;
   Map<WGObjectID, WGPURenderPipeline> render_pipelines_;
   Map<WGObjectID, WGPUComputePipeline> compute_pipelines_;
+
+  /** Pipelines of #execute_clear_attachments, keyed by the pass formats. */
+  Map<std::string, WGPURenderPipeline> clear_pipelines_;
+  WGPURenderPipeline present_pipeline_ = nullptr;
 };
 
 }  // namespace blender::gpu

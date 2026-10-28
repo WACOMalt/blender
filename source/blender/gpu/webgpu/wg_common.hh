@@ -57,6 +57,10 @@ WGPUTextureFormat wg_texture_format(TextureFormat device_format);
 bool wg_texture_format_is_renderable(TextureFormat device_format);
 bool wg_texture_format_is_storage(TextureFormat device_format);
 WGPUTextureSampleType wg_texture_sample_type(TextureFormat device_format);
+bool wg_texture_format_is_integer(WGPUTextureFormat format);
+bool wg_texture_format_has_stencil(WGPUTextureFormat format);
+
+uint64_t wg_hash_bytes(const void *data, size_t size);
 
 /** #WGPUVertexFormat_Force32 when there is no matching WebGPU format. */
 WGPUVertexFormat wg_vertex_format(gpu::VertAttrType type);

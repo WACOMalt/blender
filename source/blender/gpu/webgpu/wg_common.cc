@@ -6,6 +6,8 @@
  * \ingroup gpu
  */
 
+#include "BLI_hash_mm2a.hh"
+
 #include "wg_common.hh"
 #include "wg_backend.hh"
 
@@ -262,6 +264,48 @@ WGPUTextureSampleType wg_texture_sample_type(const TextureFormat device_format)
     default:
       return WGPUTextureSampleType_Float;
   }
+}
+
+bool wg_texture_format_is_integer(const WGPUTextureFormat format)
+{
+  switch (format) {
+    case WGPUTextureFormat_R8Uint:
+    case WGPUTextureFormat_R8Sint:
+    case WGPUTextureFormat_R16Uint:
+    case WGPUTextureFormat_R16Sint:
+    case WGPUTextureFormat_RG8Uint:
+    case WGPUTextureFormat_RG8Sint:
+    case WGPUTextureFormat_R32Uint:
+    case WGPUTextureFormat_R32Sint:
+    case WGPUTextureFormat_RG16Uint:
+    case WGPUTextureFormat_RG16Sint:
+    case WGPUTextureFormat_RGBA8Uint:
+    case WGPUTextureFormat_RGBA8Sint:
+    case WGPUTextureFormat_RGB10A2Uint:
+    case WGPUTextureFormat_RG32Uint:
+    case WGPUTextureFormat_RG32Sint:
+    case WGPUTextureFormat_RGBA16Uint:
+    case WGPUTextureFormat_RGBA16Sint:
+    case WGPUTextureFormat_RGBA32Uint:
+    case WGPUTextureFormat_RGBA32Sint:
+      return true;
+    default:
+      return false;
+  }
+}
+
+bool wg_texture_format_has_stencil(const WGPUTextureFormat format)
+{
+  return ELEM(format,
+              WGPUTextureFormat_Depth24PlusStencil8,
+              WGPUTextureFormat_Depth32FloatStencil8,
+              WGPUTextureFormat_Stencil8);
+}
+
+uint64_t wg_hash_bytes(const void *data, const size_t size)
+{
+  const uchar *bytes = static_cast<const uchar *>(data);
+  return (uint64_t(BLI_hash_mm2(bytes, size, 0)) << 32) | BLI_hash_mm2(bytes, size, 0x9747b28c);
 }
 
 WGPUVertexFormat wg_vertex_format(const gpu::VertAttrType type)

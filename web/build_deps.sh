@@ -307,6 +307,7 @@ build_shader_compiler() {
   } > "$script"
   rm -f "$PREFIX/lib/libweb_shader_compiler.a"
   emar -M < "$script"
+  cp "$ROOT/web/shader_compiler/web_shader_compiler.h" "$PREFIX/include/"
 }
 
 ALL_PACKAGES=(zlib zstd png jpeg brotli freetype fmt eigen imath deflate openjph openexr tbb tiff robinmap

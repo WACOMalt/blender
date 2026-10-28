@@ -8,6 +8,7 @@
 
 #include "wg_state.hh"
 #include "wg_backend.hh"
+#include "wg_common.hh"
 #include "wg_misc.hh"
 #include "wg_texture.hh"
 
