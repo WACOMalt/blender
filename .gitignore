@@ -89,3 +89,6 @@ compile_commands.json
 blendcache_*
 *.blend1
 *.blend2
+
+# WebAssembly build trees (see web/).
+/build_web*/

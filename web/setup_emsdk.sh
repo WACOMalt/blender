@@ -3,7 +3,7 @@
 # Usage: source web/setup_emsdk.sh   (or run it, then source $EMSDK/emsdk_env.sh)
 set -euo pipefail
 
-EMSDK_VERSION="${EMSDK_VERSION:-3.1.74}"
+EMSDK_VERSION="${EMSDK_VERSION:-6.0.13}"
 EMSDK_DIR="${EMSDK:-$HOME/.emsdk}"
 
 if [ ! -d "$EMSDK_DIR" ]; then

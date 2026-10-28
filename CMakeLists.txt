@@ -1592,6 +1592,9 @@ endif()
 
 if(UNIX AND NOT APPLE)
   include(build_files/cmake/platform/platform_unix.cmake)
+  if(EMSCRIPTEN)
+    include(build_files/cmake/platform/platform_emscripten.cmake)
+  endif()
 elseif(WIN32)
   include(build_files/cmake/platform/platform_win32.cmake)
 elseif(APPLE)
@@ -2513,6 +2516,11 @@ add_subdirectory(tests)
 
 if(WITH_BLENDER)
   add_subdirectory(source/creator)
+endif()
+
+if(EMSCRIPTEN)
+  # Build tools are compiled to WebAssembly and run with Node.js.
+  blender_web_setup_host_tools()
 endif()
 
 
