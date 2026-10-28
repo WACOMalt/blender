@@ -32,7 +32,8 @@ string(APPEND PLATFORM_LINKFLAGS " ${PLATFORM_WEB_FLAGS}")
 # WebAssembly 32 bit is limited to 4 GB.
 # Blender recurses deeply (e.g. depsgraph, UI layout), the default 64 KB stack is far too small.
 set(PLATFORM_WEB_MEMORY_FLAGS
-  "-sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=4GB -sSTACK_SIZE=8MB -sDEFAULT_PTHREAD_STACK_SIZE=2MB"
+  "-sINITIAL_MEMORY=128MB -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=4GB \
+-sSTACK_SIZE=8MB -sDEFAULT_PTHREAD_STACK_SIZE=2MB"
 )
 
 # Programs which run on the build machine to generate code or data

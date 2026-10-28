@@ -3765,11 +3765,13 @@ static void button_edit_unit_hint_refresh(bContext *C, Button *but, HandleButton
       return;
     }
 
+#ifdef WITH_PYTHON
     /* If the expression we're entering is not valid, don't show the hint. */
     if (!BPY_string_compile_check(data->text_edit.edit_string)) {
       data->text_edit_unit_hint.clear();
       return;
     }
+#endif
 
     const void *usys;
     int len;
@@ -3791,11 +3793,13 @@ static void button_edit_unit_hint_refresh(bContext *C, Button *but, HandleButton
       return;
     }
 
+#ifdef WITH_PYTHON
     /* If the expression we're entering is not valid, don't show the hint. */
     if (!BPY_string_compile_check(data->text_edit.edit_string)) {
       data->text_edit_unit_hint.clear();
       return;
     }
+#endif
   }
 
   if (name_short.empty()) {
