@@ -42,6 +42,30 @@ Decisions by the repo owner (2026-10-28):
 | Packaging | Output `.wasm` + `.js` + `.data` (preloaded `scripts/` and `datafiles/`), brotli-compressed; lazy-load optional data |
 | Browser extras | Chrome: WebGPU, File System Access, OPFS. Firefox: OPFS, WebGPU when stable. Both: feature-detect and degrade |
 
+### GPU findings (survey of `source/blender/gpu/`, 2026-10-28)
+
+- A backend implements `GPUBackend` (`gpu/intern/gpu_backend.hh`) and ~17 abstract classes
+  (Context, Batch, Shader, ShaderCompiler, Texture, FrameBuffer, VertBuf, IndexBuf, UniformBuf,
+  StorageBuf, QueryPool, StateManager, Fence, Immediate, TexturePool, WorkInFlight, ray tracing AS).
+  Sizes for reference: OpenGL ~11k lines, Metal ~24k, Vulkan ~35k.
+- All shaders are compiled at **runtime** (built-ins lazily, material node trees via `GPUCodegen`,
+  OCIO generates GLSL). WebGPU only accepts WGSL, so a GLSL → SPIR-V → WGSL compiler
+  (glslang + Tint, compiled to WebAssembly) must ship in the page, or a WGSL generator be written.
+- Compute, storage buffers and image load/store are assumed everywhere (no capability flag).
+  Even the **2D UI** needs storage buffers in the vertex stage: text (`gpu_shader_text.bsl.hh`),
+  wide/smooth lines (polyline shaders), node links. The **draw manager** (3D viewport) needs
+  storage buffers, compute and multi-draw-indirect.
+  - WebGPU: read-only storage buffers in vertex shaders are allowed; multi-draw-indirect must be
+    emulated with a loop; no geometry shaders (reuse the Metal workaround); no push constants
+    (reuse the Vulkan uniform buffer fallback).
+  - WebGL2 fallback: needs text and line shaders rewritten without storage buffers, and cannot
+    run the draw manager. Expect UI and image editors only, no 3D viewport.
+- With no backend, `blender -b` works until something creates a GPU context, then crashes
+  (`DummyBackend` returns null objects). CPU-only work (Cycles, scripts) is fine.
+- GHOST: base the Emscripten platform on the SDL implementation (smallest interactive one).
+  `GHOST_ContextVK` (creates the device in GHOST, hands it to the GPU module) is the model for
+  a WebGPU context. `WM_main` loop needs ASYNCIFY or a proxied pthread main thread.
+
 ## 3. Dependency strategy
 
 Build every library from source with Emscripten into `build_web/deps` through a
