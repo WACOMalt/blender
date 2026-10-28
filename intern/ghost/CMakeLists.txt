@@ -139,6 +139,15 @@ list(APPEND SRC
 
 if(WITH_HEADLESS)
   add_definitions(-DWITH_HEADLESS)
+elseif(EMSCRIPTEN)
+  list(APPEND SRC
+    intern/GHOST_SystemEmscripten.cc
+    intern/GHOST_WindowEmscripten.cc
+
+    intern/GHOST_SystemEmscripten.hh
+    intern/GHOST_WindowEmscripten.hh
+  )
+  add_definitions(-DWITH_GHOST_EMSCRIPTEN)
 elseif(WITH_GHOST_SDL)
   list(APPEND SRC
     intern/GHOST_SystemSDL.cc

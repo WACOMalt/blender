@@ -15,7 +15,8 @@
 # Start from the minimal feature set.
 include("${CMAKE_CURRENT_LIST_DIR}/blender_lite.cmake")
 
-set(WITH_HEADLESS              ON  CACHE BOOL "" FORCE)
+# Windowing uses GHOST's Emscripten backend (a page canvas), background mode works too.
+set(WITH_HEADLESS              OFF CACHE BOOL "" FORCE)
 set(WITH_LIBS_PRECOMPILED      OFF CACHE BOOL "" FORCE)
 set(WITH_INSTALL_PORTABLE      ON  CACHE BOOL "" FORCE)
 set(WITH_STATIC_LIBS           ON  CACHE BOOL "" FORCE)

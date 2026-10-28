@@ -234,6 +234,9 @@ build_python() {
   mkdir -p "$host"
   (
     cd "$host"
+    # PY_CALL_TRAMPOLINE: WebAssembly traps when a function is called through a pointer of
+    # another type. Many C extensions (Blender's too) define e.g. METH_NOARGS functions with one
+    # argument, CPython then calls them through a JavaScript trampoline which tolerates this.
     # The stdlib extension modules are linked statically into libpython,
     # there is no dynamic loading in the Blender WebAssembly build.
     # bz2 and sqlite3 would use Emscripten ports, downloaded from GitHub archives at build time.
@@ -244,7 +247,7 @@ build_python() {
         --with-emscripten-target=browser --enable-wasm-pthreads --disable-wasm-dynamic-linking \
         --with-build-python="$native/python" --without-ensurepip --disable-ipv6 --disable-test-modules \
         --disable-shared --prefix="$PREFIX" \
-        CFLAGS="$WEB_FLAGS" LDFLAGS="$WEB_FLAGS" \
+        CFLAGS="$WEB_FLAGS -DPY_CALL_TRAMPOLINE" LDFLAGS="$WEB_FLAGS" \
         ZLIB_CFLAGS="-I$PREFIX/include" ZLIB_LIBS="-L$PREFIX/lib -lz" \
         --with-system-expat LIBEXPAT_CFLAGS="-I$PREFIX/include" LIBEXPAT_LDFLAGS="-L$PREFIX/lib -lexpat"
     emmake make -j "$JOBS"
