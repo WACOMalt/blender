@@ -211,7 +211,12 @@ build_opencolorio() {
 
 build_openimageio() {
   fetch_git openimageio https://github.com/AcademySoftwareFoundation/OpenImageIO v3.1.16.0
-  cmake_build openimageio "$SRC/openimageio" \
+  # ustring makes its std::string point to the string table using knowledge of libc++ internals,
+  # which don't match the libc++ of Emscripten: strings longer than 10 characters became empty
+  # (breaking e.g. PNG writing). Use plain std::string copies.
+  sed -i 's/^#elif defined(_LIBCPP_VERSION) && !defined(__aarch64__)$/& \&\& !defined(__EMSCRIPTEN__)/' \
+    "$SRC/openimageio/src/libutil/ustring.cpp"
+  cmake_build openimageio "$SRC/openimageio" -DZLIB_LIBRARY="$PREFIX/lib/libz.a" \
     -DOIIO_BUILD_TOOLS=OFF -DOIIO_BUILD_TESTS=OFF -DOIIO_BUILD_DOCS=OFF -DINSTALL_DOCS=OFF \
     -DOpenImageIO_BUILD_MISSING_DEPS="" -DSTOP_ON_WARNING=OFF -DUSE_SIMD=0 -DEMBEDPLUGINS=ON \
     -DUSE_PYTHON=OFF -DUSE_QT=OFF -DUSE_NUKE=OFF -DUSE_OPENVDB=OFF -DUSE_FREETYPE=OFF -DUSE_DCMTK=OFF \

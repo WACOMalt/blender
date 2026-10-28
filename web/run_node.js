@@ -42,6 +42,8 @@ const config = {
         mountHostDir(FS, module.NODEFS, dir);
       }
       FS.chdir(process.cwd());
+      /* Pass the host environment, e.g. for Blender's debug variables. */
+      Object.assign(module.ENV, process.env);
       /* Blender prefers `$PWD` over `getcwd()` for the working directory. */
       module.ENV.PWD = process.cwd();
     },
