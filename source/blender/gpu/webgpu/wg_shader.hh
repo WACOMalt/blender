@@ -156,7 +156,10 @@ class WGShader : public Shader {
   WGObjectID compute_pipeline_get(const shader::SpecializationConstants *constants);
 
  private:
-  void build_module(MutableSpan<StringRefNull> sources, int stage, WGObjectID &r_module);
+  void build_module(const shader::ShaderCreateInfo &info,
+                    MutableSpan<StringRefNull> sources,
+                    int stage,
+                    WGObjectID &r_module);
   Vector<uint8_t> pipeline_constants(const shader::SpecializationConstants *constants) const;
 };
 

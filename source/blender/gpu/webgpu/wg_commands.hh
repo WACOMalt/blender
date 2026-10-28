@@ -53,6 +53,7 @@ enum class WGCommandType : uint32_t {
 
   CopyStagingToBuffer,
   CopyStagingToTexture,
+  CopyBufferToTexture,
   CopyBufferToBuffer,
   CopyTextureToTexture,
   ClearBuffer,
@@ -227,6 +228,16 @@ struct WGCmdCopyStagingToTexture {
   uint32_t offset[3];
   uint32_t extent[3];
   WGPUTextureAspect aspect;
+};
+
+/** `bytes_per_row` is a multiple of 256, or 0 when copying a single row. */
+struct WGCmdCopyBufferToTexture {
+  WGObjectID buffer;
+  uint64_t buffer_offset;
+  uint32_t bytes_per_row;
+  WGObjectID texture;
+  uint32_t offset[3];
+  uint32_t extent[3];
 };
 
 struct WGCmdCopyBufferToBuffer {

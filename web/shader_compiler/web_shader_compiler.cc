@@ -6,6 +6,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -26,6 +27,15 @@ static char *copy_string(const std::string &str)
   char *result = static_cast<char *>(malloc(str.size() + 1));
   memcpy(result, str.c_str(), str.size() + 1);
   return result;
+}
+
+/**
+ * Called by Tint on internal compiler errors (see `patch_tint.py`), which would otherwise
+ * terminate the process. Tint is compiled without exceptions, throw from here.
+ */
+extern "C" [[noreturn]] void wsc_tint_internal_compiler_error(const char *message)
+{
+  throw std::runtime_error(message);
 }
 
 void WSC_init()
@@ -71,10 +81,10 @@ static bool glsl_to_spirv(const char *glsl,
   return true;
 }
 
-WSC_Result WSC_glsl_to_wgsl(const char *glsl,
-                            WSC_Stage stage,
-                            const WSC_SamplerMapping *sampler_mappings,
-                            int sampler_mappings_num)
+static WSC_Result glsl_to_wgsl(const char *glsl,
+                               WSC_Stage stage,
+                               const WSC_SamplerMapping *sampler_mappings,
+                               int sampler_mappings_num)
 {
   WSC_Result result = {nullptr, nullptr};
   std::string log;
@@ -108,6 +118,20 @@ WSC_Result WSC_glsl_to_wgsl(const char *glsl,
   result.wgsl = copy_string(output->wgsl);
   result.log = copy_string(log);
   return result;
+}
+
+WSC_Result WSC_glsl_to_wgsl(const char *glsl,
+                            WSC_Stage stage,
+                            const WSC_SamplerMapping *sampler_mappings,
+                            int sampler_mappings_num)
+{
+  try {
+    return glsl_to_wgsl(glsl, stage, sampler_mappings, sampler_mappings_num);
+  }
+  catch (const std::exception &error) {
+    WSC_Result result = {nullptr, copy_string(error.what())};
+    return result;
+  }
 }
 
 void WSC_result_free(WSC_Result *result)

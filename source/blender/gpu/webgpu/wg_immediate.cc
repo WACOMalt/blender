@@ -73,7 +73,8 @@ void WGImmediate::end()
   BLI_assert(context.shader == shader);
   if (shader->is_polyline) {
     if (polyline_buffer_ == nullptr) {
-      polyline_buffer_ = new WGUniformBuf(vertex_data.size(), "polyline");
+      /* The size is set by #WGUniformBuf::host_data_set. */
+      polyline_buffer_ = new WGUniformBuf(16, "polyline");
     }
     polyline_buffer_->host_data_set(vertex_data.data(), vertex_data.size());
     WGStateManager &state_manager = context.state_manager_get();

@@ -16,6 +16,10 @@
 
 namespace blender::gpu {
 
+constexpr uint32_t WG_BUFFER_TEXTURE_WIDTH = 4096;
+
+class WGVertBuf;
+
 class WGTexture : public Texture {
   /** The WebGPU texture, of the source texture for views. */
   WGObjectID id_ = WG_NULL_ID;
@@ -26,6 +30,12 @@ class WGTexture : public Texture {
   bool is_unsupported_ = false;
   /** First mip level of the WebGPU texture used by this texture view. */
   int view_mip_start_ = 0;
+  /**
+   * Buffer textures don't exist in WebGPU, they are 2D textures (#WG_BUFFER_TEXTURE_WIDTH wide)
+   * with a copy of the vertex buffer, see `wg_shader.cc` for the shader side.
+   */
+  WGVertBuf *source_vbo_ = nullptr;
+  uint32_t buffer_width_ = 0, buffer_height_ = 0;
 
  public:
   WGTexture(const char *name) : Texture(name) {}
@@ -46,6 +56,9 @@ class WGTexture : public Texture {
                   int extent[3],
                   eGPUDataFormat format,
                   GPUPixelBuffer *pixbuf) override;
+
+  /** Copy the vertex buffer of a buffer texture, before it is used by a draw. */
+  void buffer_texture_update();
 
   /** Read a region of a mip level, `offset[2]` is the layer (or depth for 3D textures). */
   void read_region(int mip,

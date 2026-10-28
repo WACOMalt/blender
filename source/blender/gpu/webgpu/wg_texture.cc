@@ -6,12 +6,15 @@
  * \ingroup gpu
  */
 
+#include <algorithm>
+
 #include "BLI_math_base.hh"
 #include "BLI_vector.hh"
 
 #include "vk_data_conversion.hh"
 
 #include "wg_backend.hh"
+#include "wg_buffer.hh"
 #include "wg_common.hh"
 #include "wg_misc.hh"
 #include "wg_texture.hh"
@@ -128,12 +131,73 @@ bool WGTexture::init_internal()
   return true;
 }
 
-bool WGTexture::init_internal(VertBuf * /*vbo*/)
+bool WGTexture::init_internal(VertBuf *vbo)
 {
-  /* TODO: buffer textures have no WebGPU equivalent, they need storage buffers in shaders. */
-  is_unsupported_ = true;
-  device_format_ = format_;
+  source_vbo_ = static_cast<WGVertBuf *>(vbo);
+  device_format_ = wg_device_format(format_);
+  wg_format_ = wg_texture_format(device_format_);
+  is_unsupported_ = wg_format_ == WGPUTextureFormat_Undefined;
+  mipmaps_ = 1;
   return true;
+}
+
+void WGTexture::buffer_texture_update()
+{
+  if (source_vbo_ == nullptr || is_unsupported_) {
+    return;
+  }
+  const WGBufferBinding source = source_vbo_->texture_binding_ensure();
+  const uint32_t texels = source_vbo_->vertex_len;
+  if (texels == 0 || source.buffer == WG_NULL_ID) {
+    return;
+  }
+  const uint32_t width = std::min(texels, WG_BUFFER_TEXTURE_WIDTH);
+  const uint32_t height = (texels + WG_BUFFER_TEXTURE_WIDTH - 1) / WG_BUFFER_TEXTURE_WIDTH;
+  const uint32_t texel_size = uint32_t(to_bytesize(device_format_));
+
+  WGRecord record;
+  if (id_ == WG_NULL_ID || width != buffer_width_ || height != buffer_height_) {
+    wg_object_destroy(id_);
+    WGCmdCreateTexture cmd = {};
+    cmd.texture = id_ = wg_object_id_alloc();
+    cmd.dimension = WGPUTextureDimension_2D;
+    cmd.format = wg_format_;
+    cmd.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst;
+    cmd.width = width;
+    cmd.height = height;
+    cmd.depth_or_layers = 1;
+    cmd.mip_count = 1;
+    cmd.sample_count = 1;
+    record.stream.push(WGCommandType::CreateTexture, cmd);
+    buffer_width_ = width;
+    buffer_height_ = height;
+  }
+  /* Full rows, then the remaining texels. */
+  const uint32_t full_rows = texels / WG_BUFFER_TEXTURE_WIDTH;
+  const uint32_t remainder = texels % WG_BUFFER_TEXTURE_WIDTH;
+  if (full_rows > 0) {
+    WGCmdCopyBufferToTexture cmd = {};
+    cmd.buffer = source.buffer;
+    cmd.buffer_offset = source.offset;
+    cmd.bytes_per_row = (full_rows > 1) ? WG_BUFFER_TEXTURE_WIDTH * texel_size : 0;
+    cmd.texture = id_;
+    cmd.extent[0] = WG_BUFFER_TEXTURE_WIDTH;
+    cmd.extent[1] = full_rows;
+    cmd.extent[2] = 1;
+    record.stream.push(WGCommandType::CopyBufferToTexture, cmd);
+  }
+  if (remainder > 0) {
+    WGCmdCopyBufferToTexture cmd = {};
+    cmd.buffer = source.buffer;
+    cmd.buffer_offset = source.offset + uint64_t(full_rows) * WG_BUFFER_TEXTURE_WIDTH *
+                                            texel_size;
+    cmd.texture = id_;
+    cmd.offset[1] = full_rows;
+    cmd.extent[0] = remainder;
+    cmd.extent[1] = 1;
+    cmd.extent[2] = 1;
+    record.stream.push(WGCommandType::CopyBufferToTexture, cmd);
+  }
 }
 
 bool WGTexture::init_internal(gpu::Texture *src, bool /*use_stencil*/)
@@ -316,6 +380,43 @@ void WGTexture::copy_to(Texture *dst, IndexRange mip_levels)
 void WGTexture::clear(double4 data)
 {
   if (!is_usable()) {
+    return;
+  }
+  /* Render-able textures are cleared by render passes, depth can't be uploaded. */
+  if (wg_texture_format_is_renderable(device_format_) &&
+      !ELEM(type_, GPU_TEXTURE_1D, GPU_TEXTURE_3D, GPU_TEXTURE_BUFFER))
+  {
+    const bool is_depth = (format_flag_ & GPU_FORMAT_DEPTH) != 0;
+    const int layers = (type_ & (GPU_TEXTURE_ARRAY | GPU_TEXTURE_CUBE)) ? layer_count() : 1;
+    WGRecord record;
+    for (int mip = 0; mip < max_ii(mipmaps_, 1); mip++) {
+      for (int layer = 0; layer < layers; layer++) {
+        WGCmdBeginRenderPass cmd = {};
+        cmd.pass_id = wg_recorder().next_pass_id++;
+        WGAttachment &attachment = is_depth ? cmd.depth : cmd.color[0];
+        attachment.texture = id_;
+        attachment.view_format = wg_format_;
+        attachment.mip = uint32_t(view_mip_start_ + mip);
+        attachment.layer = uint32_t(view_layer_start_ + layer);
+        attachment.load_op = WGPULoadOp_Clear;
+        attachment.store_op = WGPUStoreOp_Store;
+        if (is_depth) {
+          cmd.clear_depth = float(data[0]);
+          cmd.has_stencil = has_stencil();
+          cmd.stencil_load_op = WGPULoadOp_Clear;
+          cmd.stencil_store_op = WGPUStoreOp_Store;
+          cmd.clear_stencil = (data[1] == double(0xFFFFFFFFu)) ? 0u : uint32_t(data[1]);
+        }
+        else {
+          cmd.color_len = 1;
+          for (int i = 0; i < 4; i++) {
+            attachment.clear_color[i] = data[i];
+          }
+        }
+        record.stream.push(WGCommandType::BeginRenderPass, cmd);
+        record.stream.push(WGCommandType::EndRenderPass, WGCmdEndRenderPass{cmd.pass_id});
+      }
+    }
     return;
   }
   /* Upload the clear value to every texel of every mip level, which works for all formats.

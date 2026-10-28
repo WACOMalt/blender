@@ -9,6 +9,9 @@
 #include <sstream>
 
 #include "BLI_math_base.hh"
+#include "BLI_set.hh"
+
+#include "BKE_global.hh"
 
 #include "CLG_log.h"
 
@@ -328,12 +331,13 @@ static void print_image_type(std::ostream &os,
   os << " ";
 }
 
-static std::ostream &print_qualifier(std::ostream &os, const Qualifier &qualifiers)
+static std::ostream &print_qualifier(std::ostream &os,
+                                     const Qualifier &qualifiers,
+                                     const bool is_buffer)
 {
-  if (!flag_is_set(qualifiers, Qualifier::no_restrict)) {
-    os << "restrict ";
-  }
-  if (!flag_is_set(qualifiers, Qualifier::read)) {
+  /* No `restrict`, it is only an optimization hint and Tint doesn't support it.
+   * WGSL has no write only storage buffers, they are read-write. */
+  if (!flag_is_set(qualifiers, Qualifier::read) && !is_buffer) {
     os << "writeonly ";
   }
   if (!flag_is_set(qualifiers, Qualifier::write)) {
@@ -366,7 +370,7 @@ static void print_resource(std::ostream &os,
       break;
     case ShaderCreateInfo::Resource::BindType::IMAGE:
       os << "uniform ";
-      print_qualifier(os, res.image.qualifiers);
+      print_qualifier(os, res.image.qualifiers, false);
       print_image_type(os, res.image.type, res.bind_type);
       os << res.image.name << ";";
       break;
@@ -375,7 +379,7 @@ static void print_resource(std::ostream &os,
          << " " << res.uniformbuf.name << "; };";
       break;
     case ShaderCreateInfo::Resource::BindType::STORAGE_BUFFER:
-      print_qualifier(os, res.storagebuf.qualifiers);
+      print_qualifier(os, res.storagebuf.qualifiers, true);
       os << "buffer _" << res.storagebuf.name.str_no_array() << " { " << res.storagebuf.type_name
          << " " << res.storagebuf.name << "; };";
       break;
@@ -652,7 +656,7 @@ std::string WGShader::fragment_interface_declare(const ShaderCreateInfo &info) c
   }
 
   const bool use_gl_frag_depth = info.depth_write_ != DepthWrite::UNCHANGED &&
-                                 info.fragment_source_.find("gl_FragDepth") != std::string::npos;
+                                 info.fragment_source_.find("gl_FragDepth") != StringRef::not_found;
   if (use_gl_frag_depth) {
     ss << "layout(" << to_string(info.depth_write_) << ") out float gl_FragDepth;\n";
   }
@@ -738,11 +742,207 @@ static std::string wg_glsl_patch(const char *stage_define)
   /* Flat varyings use the first vertex. */
   ss << "#define GPU_PROVOKING_VERTEX_LAST\n";
   ss << stage_define;
+  if (STREQ(stage_define, "#define GPU_VERTEX_SHADER\n")) {
+    /* WebGPU points are always one pixel, Tint only accepts constant point sizes. */
+    ss << "float wg_PointSize;\n";
+    ss << "#define gl_PointSize wg_PointSize\n";
+  }
+
+  if (STREQ(stage_define, "#define GPU_FRAGMENT_SHADER\n")) {
+    /* WebGPU points are always one pixel, without point coordinates. */
+    ss << "#define gl_PointCoord vec2(0.5)\n";
+  }
 
   shader::GeneratedSourceList sources{
       shader::GeneratedSource{"gpu_shader_glsl_extension.glsl", {}, ss.str()}};
-  return fmt::to_string(fmt::join(
+  std::string result = fmt::to_string(fmt::join(
       gpu_shader_dependency_get_resolved_source("gpu_shader_compat_glsl.glsl", sources), ""));
+  /* WGSL has no `isnan` and `isinf`, test the bits. */
+  result += R"(
+bool wg_isnan(float x) { return (floatBitsToUint(x) & 0x7FFFFFFFu) > 0x7F800000u; }
+bvec2 wg_isnan(vec2 x) { return greaterThan(floatBitsToUint(x) & 0x7FFFFFFFu, uvec2(0x7F800000u)); }
+bvec3 wg_isnan(vec3 x) { return greaterThan(floatBitsToUint(x) & 0x7FFFFFFFu, uvec3(0x7F800000u)); }
+bvec4 wg_isnan(vec4 x) { return greaterThan(floatBitsToUint(x) & 0x7FFFFFFFu, uvec4(0x7F800000u)); }
+bool wg_isinf(float x) { return (floatBitsToUint(x) & 0x7FFFFFFFu) == 0x7F800000u; }
+bvec2 wg_isinf(vec2 x) { return equal(floatBitsToUint(x) & 0x7FFFFFFFu, uvec2(0x7F800000u)); }
+bvec3 wg_isinf(vec3 x) { return equal(floatBitsToUint(x) & 0x7FFFFFFFu, uvec3(0x7F800000u)); }
+bvec4 wg_isinf(vec4 x) { return equal(floatBitsToUint(x) & 0x7FFFFFFFu, uvec4(0x7F800000u)); }
+#define isnan wg_isnan
+#define isinf wg_isinf
+)";
+  /* WGSL can't represent NaN constants, read the value from a variable (also see
+   * #wg_glsl_workarounds). */
+  result += "#undef NAN_FLT\n";
+  result += "uint wg_nan_bits = 0x7FC00000u;\n";
+  result += "#define NAN_FLT uintBitsToFloat(wg_nan_bits)\n";
+  return result;
+}
+
+static bool wg_is_identifier_char(const char c)
+{
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+}
+
+/**
+ * Replace calls of `function` with one of `names` as first argument by calls of `replacement`.
+ */
+static void wg_replace_texture_calls(std::string &glsl,
+                                     const StringRef function,
+                                     const StringRef replacement,
+                                     const Set<std::string> &names)
+{
+  const std::string pattern = function + "(";
+  size_t pos = 0;
+  while ((pos = glsl.find(pattern, pos)) != std::string::npos) {
+    if (pos > 0 && wg_is_identifier_char(glsl[pos - 1])) {
+      pos += pattern.size();
+      continue;
+    }
+    size_t arg_start = pos + pattern.size();
+    while (arg_start < glsl.size() && isspace(glsl[arg_start])) {
+      arg_start++;
+    }
+    size_t arg_end = arg_start;
+    while (arg_end < glsl.size() && wg_is_identifier_char(glsl[arg_end])) {
+      arg_end++;
+    }
+    size_t next = arg_end;
+    while (next < glsl.size() && isspace(glsl[next])) {
+      next++;
+    }
+    if (next < glsl.size() && glsl[next] == ',' &&
+        names.contains(glsl.substr(arg_start, arg_end - arg_start)))
+    {
+      glsl.replace(pos, function.size(), replacement);
+      pos += replacement.size();
+      continue;
+    }
+    pos += pattern.size();
+  }
+}
+
+/**
+ * WGSL has no buffer textures, they are 2D textures of #WG_BUFFER_TEXTURE_WIDTH texels per row
+ * (see #WGTexture::source_vbo_).
+ */
+static const char *WG_BUFFER_TEXTURE_FUNCTIONS = R"(
+#define samplerBuffer sampler2D
+#define isamplerBuffer isampler2D
+#define usamplerBuffer usampler2D
+vec4 texelFetch(sampler2D s, int i) {
+  int w = textureSize(s, 0).x;
+  return texelFetch(s, ivec2(i % w, i / w), 0);
+}
+ivec4 texelFetch(isampler2D s, int i) {
+  int w = textureSize(s, 0).x;
+  return texelFetch(s, ivec2(i % w, i / w), 0);
+}
+uvec4 texelFetch(usampler2D s, int i) {
+  int w = textureSize(s, 0).x;
+  return texelFetch(s, ivec2(i % w, i / w), 0);
+}
+int textureSize(sampler2D s) {
+  ivec2 size = textureSize(s, 0);
+  return size.x * size.y;
+}
+int textureSize(isampler2D s) {
+  ivec2 size = textureSize(s, 0);
+  return size.x * size.y;
+}
+int textureSize(usampler2D s) {
+  ivec2 size = textureSize(s, 0);
+  return size.x * size.y;
+}
+)";
+
+/** Integer textures can't be sampled in WGSL, fetch the texel instead (nearest filtering). */
+static const char *WG_INTEGER_TEXTURE_FUNCTIONS = R"(
+uvec4 wg_texture_int(usampler2D s, vec2 co) {
+  ivec2 size = textureSize(s, 0);
+  return texelFetch(s, clamp(ivec2(co * vec2(size)), ivec2(0), size - 1), 0);
+}
+ivec4 wg_texture_int(isampler2D s, vec2 co) {
+  ivec2 size = textureSize(s, 0);
+  return texelFetch(s, clamp(ivec2(co * vec2(size)), ivec2(0), size - 1), 0);
+}
+uvec4 wg_texture_int(usampler2DArray s, vec3 co) {
+  ivec3 size = textureSize(s, 0);
+  return texelFetch(s, ivec3(clamp(ivec2(co.xy * vec2(size.xy)), ivec2(0), size.xy - 1), int(co.z)), 0);
+}
+ivec4 wg_texture_int(isampler2DArray s, vec3 co) {
+  ivec3 size = textureSize(s, 0);
+  return texelFetch(s, ivec3(clamp(ivec2(co.xy * vec2(size.xy)), ivec2(0), size.xy - 1), int(co.z)), 0);
+}
+uvec4 wg_texture_int(usampler3D s, vec3 co) {
+  ivec3 size = textureSize(s, 0);
+  return texelFetch(s, clamp(ivec3(co * vec3(size)), ivec3(0), size - 1), 0);
+}
+ivec4 wg_texture_int(isampler3D s, vec3 co) {
+  ivec3 size = textureSize(s, 0);
+  return texelFetch(s, clamp(ivec3(co * vec3(size)), ivec3(0), size - 1), 0);
+}
+uvec4 wg_texture_lod_int(usampler2D s, vec2 co, float lod) {
+  ivec2 size = textureSize(s, int(lod));
+  return texelFetch(s, clamp(ivec2(co * vec2(size)), ivec2(0), size - 1), int(lod));
+}
+ivec4 wg_texture_lod_int(isampler2D s, vec2 co, float lod) {
+  ivec2 size = textureSize(s, int(lod));
+  return texelFetch(s, clamp(ivec2(co * vec2(size)), ivec2(0), size - 1), int(lod));
+}
+)";
+
+static bool wg_is_integer_image_type(const ImageType type)
+{
+  switch (type) {
+    case ImageType::Int1D:
+    case ImageType::Int1DArray:
+    case ImageType::Int2D:
+    case ImageType::Int2DArray:
+    case ImageType::Int3D:
+    case ImageType::IntCube:
+    case ImageType::IntCubeArray:
+    case ImageType::Uint1D:
+    case ImageType::Uint1DArray:
+    case ImageType::Uint2D:
+    case ImageType::Uint2DArray:
+    case ImageType::Uint3D:
+    case ImageType::UintCube:
+    case ImageType::UintCubeArray:
+      return true;
+    default:
+      return false;
+  }
+}
+
+/** Source changes for constructs WGSL or Tint don't support. */
+static void wg_glsl_workarounds(const ShaderCreateInfo &info, std::string &glsl)
+{
+  Set<std::string> integer_samplers;
+  for (const Span<ShaderCreateInfo::Resource> resources :
+       {info.pass_resources_.as_span(),
+        info.batch_resources_.as_span(),
+        info.geometry_resources_.as_span()})
+  {
+    for (const ShaderCreateInfo::Resource &res : resources) {
+      if (res.bind_type == ShaderCreateInfo::Resource::BindType::SAMPLER &&
+          wg_is_integer_image_type(res.sampler.type))
+      {
+        integer_samplers.add(res.sampler.name);
+      }
+    }
+  }
+  if (!integer_samplers.is_empty()) {
+    wg_replace_texture_calls(glsl, "texture", "wg_texture_int", integer_samplers);
+    wg_replace_texture_calls(glsl, "textureLod", "wg_texture_lod_int", integer_samplers);
+  }
+
+  /* NaN constants, also expanded in sources preprocessed when building. */
+  const StringRef nan_constant = "uintBitsToFloat(0x7FC00000u)";
+  for (int64_t pos = StringRef(glsl).find(nan_constant); pos != StringRef::not_found;
+       pos = StringRef(glsl).find(nan_constant, pos))
+  {
+    glsl.replace(pos, nan_constant.size(), "uintBitsToFloat(wg_nan_bits)");
+  }
 }
 
 /** \} */
@@ -791,7 +991,26 @@ void WGShader::init(const ShaderCreateInfo &info, bool /*is_codegen_only*/)
   }
 }
 
-void WGShader::build_module(MutableSpan<StringRefNull> sources,
+static bool glsl_uses_integer_samplers(const ShaderCreateInfo &info)
+{
+  for (const Span<ShaderCreateInfo::Resource> resources :
+       {info.pass_resources_.as_span(),
+        info.batch_resources_.as_span(),
+        info.geometry_resources_.as_span()})
+  {
+    for (const ShaderCreateInfo::Resource &res : resources) {
+      if (res.bind_type == ShaderCreateInfo::Resource::BindType::SAMPLER &&
+          wg_is_integer_image_type(res.sampler.type))
+      {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+void WGShader::build_module(const ShaderCreateInfo &info,
+                            MutableSpan<StringRefNull> sources,
                             const int stage,
                             WGObjectID &r_module)
 {
@@ -801,9 +1020,19 @@ void WGShader::build_module(MutableSpan<StringRefNull> sources,
   const char *stage_name = stage == WSC_STAGE_VERTEX   ? "vertex" :
                            stage == WSC_STAGE_FRAGMENT ? "fragment" :
                                                          "compute";
-  const std::string patch = wg_glsl_patch(stage_define);
+  std::string patch = wg_glsl_patch(stage_define);
+  if (glsl_uses_integer_samplers(info)) {
+    patch += WG_INTEGER_TEXTURE_FUNCTIONS;
+  }
+  for (const int i : sources.index_range().drop_front(1)) {
+    if (sources[i].find("samplerBuffer") != StringRef::not_found) {
+      patch += WG_BUFFER_TEXTURE_FUNCTIONS;
+      break;
+    }
+  }
   sources[SOURCES_INDEX_VERSION] = patch;
-  const std::string glsl = fmt::to_string(fmt::join(sources, ""));
+  std::string glsl = fmt::to_string(fmt::join(sources, ""));
+  wg_glsl_workarounds(info, glsl);
 
   /* Samplers use the binding of their texture in the sampler group. */
   Vector<WSC_SamplerMapping> sampler_mappings;
@@ -822,7 +1051,16 @@ void WGShader::build_module(MutableSpan<StringRefNull> sources,
                                        int(sampler_mappings.size()));
   if (result.wgsl == nullptr) {
     WGLogParser parser;
-    print_log(sources, result.log ? result.log : "Unknown error", stage_name, true, &parser);
+    /* The log printer only handles complete lines. */
+    std::string log = result.log ? result.log : "Unknown error";
+    if (!log.ends_with('\n')) {
+      log += '\n';
+    }
+    print_log(sources, log.c_str(), stage_name, true, &parser);
+    if (G.debug & G_DEBUG_GPU) {
+      /* The translated source, to reproduce the error with `web/shader_compiler/wsc_test`. */
+      printf("WebGPU GLSL of %s (%s):\n%s\nEND OF GLSL\n", name, stage_name, glsl.c_str());
+    }
     compilation_failed_ = true;
     WSC_result_free(&result);
     return;
@@ -848,10 +1086,10 @@ void WGShader::build_module(MutableSpan<StringRefNull> sources,
   WSC_result_free(&result);
 }
 
-void WGShader::vertex_shader_from_glsl(const ShaderCreateInfo & /*info*/,
+void WGShader::vertex_shader_from_glsl(const ShaderCreateInfo &info,
                                        MutableSpan<StringRefNull> sources)
 {
-  build_module(sources, WSC_STAGE_VERTEX, vertex_module_);
+  build_module(info, sources, WSC_STAGE_VERTEX, vertex_module_);
 }
 
 void WGShader::geometry_shader_from_glsl(const ShaderCreateInfo & /*info*/,
@@ -861,16 +1099,16 @@ void WGShader::geometry_shader_from_glsl(const ShaderCreateInfo & /*info*/,
   compilation_failed_ = true;
 }
 
-void WGShader::fragment_shader_from_glsl(const ShaderCreateInfo & /*info*/,
+void WGShader::fragment_shader_from_glsl(const ShaderCreateInfo &info,
                                          MutableSpan<StringRefNull> sources)
 {
-  build_module(sources, WSC_STAGE_FRAGMENT, fragment_module_);
+  build_module(info, sources, WSC_STAGE_FRAGMENT, fragment_module_);
 }
 
-void WGShader::compute_shader_from_glsl(const ShaderCreateInfo & /*info*/,
+void WGShader::compute_shader_from_glsl(const ShaderCreateInfo &info,
                                         MutableSpan<StringRefNull> sources)
 {
-  build_module(sources, WSC_STAGE_COMPUTE, compute_module_);
+  build_module(info, sources, WSC_STAGE_COMPUTE, compute_module_);
 }
 
 bool WGShader::finalize(const ShaderCreateInfo *info)

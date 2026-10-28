@@ -60,6 +60,7 @@ static WGPUTextureViewDimension wg_view_dimension(const ImageType type)
     case ImageType::DepthCubeArray:
       return WGPUTextureViewDimension_CubeArray;
     default:
+      /* Including buffer textures, see #WGTexture::source_vbo_. */
       return WGPUTextureViewDimension_2D;
   }
 }
@@ -101,6 +102,9 @@ static WGPUTextureSampleType wg_sample_type(const ImageType type)
     case ImageType::DepthCube:
     case ImageType::DepthCubeArray:
       /* Depth textures can't be filtered. */
+      return WGPUTextureSampleType_UnfilterableFloat;
+    case ImageType::FloatBuffer:
+      /* Only fetched, they can have 32 bit float formats. */
       return WGPUTextureSampleType_UnfilterableFloat;
     default:
       return WGPUTextureSampleType_Float;

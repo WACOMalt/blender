@@ -435,6 +435,9 @@ static void wg_resources_get(WGContext &context, WGShader &shader, WGPendingReso
         if (texture && sampler_state.type == GPU_SAMPLER_STATE_TYPE_INTERNAL) {
           sampler_state = texture->sampler_state;
         }
+        if (texture && texture->type_get() == GPU_TEXTURE_BUFFER) {
+          texture->buffer_texture_update();
+        }
         wg_texture_binding(texture, resource.layout, false, binding);
         r_pending.resources.append(binding);
 

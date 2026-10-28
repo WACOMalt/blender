@@ -19,6 +19,8 @@
 
 namespace blender::gpu {
 
+class WGTexture;
+
 /** A WebGPU buffer, created with all usages. */
 class WGBuffer {
   WGObjectID id_ = WG_NULL_ID;
@@ -66,8 +68,15 @@ class WGVertBuf : public VertBuf {
   WGBuffer converted_buffer_;
   GPUVertFormat converted_format_ = {};
   bool has_converted_ = false;
+  /** Data of buffer textures with 3 components padded to 4, WebGPU has no RGB formats. */
+  WGBuffer padded_buffer_;
+  bool has_padded_ = false;
+  /** Texture used when bound as buffer texture. */
+  WGTexture *buffer_texture_ = nullptr;
 
  public:
+  ~WGVertBuf() override;
+
   void bind_as_ssbo(uint binding) override;
   void bind_as_texture(uint binding) override;
   void wrap_handle(uint64_t handle) override;
@@ -77,6 +86,8 @@ class WGVertBuf : public VertBuf {
 
   /** Upload the data when needed, returns the binding of the buffer. */
   WGBufferBinding binding_ensure();
+  /** Binding of the buffer with the data of buffer textures. */
+  WGBufferBinding texture_binding_ensure();
   /** Binding and format of the buffer when used for vertex attributes. */
   WGBufferBinding vertex_binding_ensure(const GPUVertFormat *&r_format);
 

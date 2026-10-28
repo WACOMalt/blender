@@ -12,7 +12,7 @@ const { chromium } = require('playwright');
   let done;
   const finished = new Promise(r => (done = r));
   page.on('console', m => { console.log(`[${m.type()}] ${m.text()}`); if (m.text().includes('RESULT:')) done(); });
-  page.on('pageerror', e => { console.log(`[pageerror] ${e.message}`); });
+  page.on('pageerror', e => { console.log(`[pageerror] ${e.message}\n${e.stack || ''}`); });
   await page.goto(url);
   console.log('crossOriginIsolated:', await page.evaluate(() => crossOriginIsolated), 'gpu:', await page.evaluate(() => !!navigator.gpu));
   await Promise.race([finished, new Promise(r => setTimeout(r, timeoutMs))]);

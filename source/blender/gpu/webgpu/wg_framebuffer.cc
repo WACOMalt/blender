@@ -66,10 +66,13 @@ void WGFrameBuffer::bind(bool enabled_srgb)
     }
     context->active_fb = this;
   }
-  if (use_explicit_load_store_ || dirty_attachments_) {
+  if (dirty_attachments_) {
+    dirty_attachments_ = false;
+    render_pass_record_end();
+  }
+  if (use_explicit_load_store_) {
     /* Load operations are set after binding, they apply to a new pass. */
     render_pass_end();
-    dirty_attachments_ = false;
   }
   srgb_ = false;
   for (int slot = 0; slot < WG_MAX_COLOR_TARGETS; slot++) {
@@ -106,8 +109,8 @@ bool WGFrameBuffer::check(char err_out[256])
 uint32_t WGFrameBuffer::render_pass_ensure()
 {
   if (dirty_attachments_) {
-    render_pass_end();
     dirty_attachments_ = false;
+    render_pass_record_end();
   }
   if (pass_id_ != 0) {
     return pass_id_;
@@ -178,6 +181,11 @@ void WGFrameBuffer::render_pass_end()
     /* Nothing was drawn, the clears still need to happen. */
     render_pass_ensure();
   }
+  render_pass_record_end();
+}
+
+void WGFrameBuffer::render_pass_record_end()
+{
   if (pass_id_ == 0) {
     return;
   }

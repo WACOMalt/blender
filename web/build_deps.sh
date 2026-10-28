@@ -294,6 +294,7 @@ fetch_dawn() {
     git -c advice.detachedHead=false clone -q --depth 1 --branch 20260107.0 \
       https://github.com/abseil/abseil-cpp "$third_party/abseil-cpp"
   fi
+  python3 "$ROOT/web/shader_compiler/patch_tint.py" "$SRC/dawn"
 }
 
 # GLSL → WGSL compiler (glslang + Tint) used by the WebGPU backend, see web/shader_compiler/.

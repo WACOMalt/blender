@@ -13,12 +13,14 @@
 
 #include "BLI_math_base.hh"
 
+#include "GPU_texture.hh"
 #include "gpu_context_private.hh"
 
 #include "wg_backend.hh"
 #include "wg_buffer.hh"
 #include "wg_common.hh"
 #include "wg_state.hh"
+#include "wg_texture.hh"
 
 namespace blender::gpu {
 
@@ -136,6 +138,8 @@ void WGVertBuf::release_data()
   buffer_.free();
   converted_buffer_.free();
   has_converted_ = false;
+  padded_buffer_.free();
+  has_padded_ = false;
   MEM_SAFE_DELETE(data_);
 }
 
@@ -223,6 +227,44 @@ static Vector<uint8_t> wg_convert_vertex_data(const GPUVertFormat &format,
   return result;
 }
 
+/** Buffer texture formats without WebGPU equivalent, stored with 4 components. */
+static bool wg_format_needs_padding(const GPUVertFormat &format)
+{
+  return format.attr_len == 1 && ELEM(format.attrs[0].type.format,
+                                      VertAttrType::SFLOAT_32_32_32,
+                                      VertAttrType::SINT_32_32_32,
+                                      VertAttrType::UINT_32_32_32);
+}
+
+static Vector<uint32_t> wg_pad_vertex_data(const void *data, const uint32_t vertex_len)
+{
+  const uint32_t *src = static_cast<const uint32_t *>(data);
+  Vector<uint32_t> result(size_t(vertex_len) * 4, 0);
+  for (uint32_t v = 0; v < vertex_len; v++) {
+    for (int c = 0; c < 3; c++) {
+      result[v * 4 + c] = src[v * 3 + c];
+    }
+  }
+  return result;
+}
+
+WGVertBuf::~WGVertBuf()
+{
+  if (buffer_texture_) {
+    GPU_texture_free(buffer_texture_);
+    buffer_texture_ = nullptr;
+  }
+}
+
+WGBufferBinding WGVertBuf::texture_binding_ensure()
+{
+  const WGBufferBinding binding = binding_ensure();
+  if (has_padded_) {
+    return {padded_buffer_.id_get(), 0, padded_buffer_.size_get()};
+  }
+  return binding;
+}
+
 WGBufferBinding WGVertBuf::vertex_binding_ensure(const GPUVertFormat *&r_format)
 {
   const WGBufferBinding binding = binding_ensure();
@@ -248,6 +290,13 @@ WGBufferBinding WGVertBuf::binding_ensure()
         converted_buffer_.ensure(converted.size());
         converted_buffer_.update(converted.data(), converted.size());
       }
+      has_padded_ = (extended_usage_ & GPU_USAGE_FLAG_BUFFER_TEXTURE_ONLY) &&
+                    wg_format_needs_padding(format);
+      if (has_padded_) {
+        const Vector<uint32_t> padded = wg_pad_vertex_data(data_, vertex_len);
+        padded_buffer_.ensure(padded.size() * sizeof(uint32_t));
+        padded_buffer_.update(padded.data(), padded.size() * sizeof(uint32_t));
+      }
     }
     if (usage_ == GPU_USAGE_STATIC) {
       MEM_SAFE_DELETE(data_);
@@ -267,9 +316,17 @@ void WGVertBuf::bind_as_ssbo(uint binding)
   wg_state_manager().storage_buffer_bind(binding_ensure(), int(binding));
 }
 
-void WGVertBuf::bind_as_texture(uint /*binding*/)
+void WGVertBuf::bind_as_texture(uint binding)
 {
-  /* TODO: buffer textures are not supported by WebGPU. */
+  /* Buffer textures are 2D textures with a copy of the data, see #WGTexture::source_vbo_. */
+  if (buffer_texture_ == nullptr) {
+    buffer_texture_ = static_cast<WGTexture *>(
+        GPU_texture_create_from_vertbuf("buffer_texture", this));
+  }
+  if (buffer_texture_) {
+    wg_state_manager().texture_bind(
+        buffer_texture_, GPUSamplerState::default_sampler(), int(binding));
+  }
 }
 
 void WGVertBuf::wrap_handle(uint64_t /*handle*/)

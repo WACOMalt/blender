@@ -70,7 +70,7 @@ class WGFrameBuffer : public FrameBuffer {
 
   /** Record the beginning of the render pass if needed, returns the pass id. */
   uint32_t render_pass_ensure();
-  /** Record the end of the render pass if one is active. */
+  /** Record the end of the render pass, beginning it first when clears are pending. */
   void render_pass_end();
 
   /** Fill the attachment formats of a pipeline key. */
@@ -106,6 +106,8 @@ class WGFrameBuffer : public FrameBuffer {
                      uint32_t stencil);
   bool scissor_covers_framebuffer() const;
   bool has_pending_clears() const;
+  /** Record the end of the active render pass, without pending clears. */
+  void render_pass_record_end();
   /** Format of the attachment view of a color texture. */
   WGPUTextureFormat attachment_view_format(const WGTexture *texture) const;
 };

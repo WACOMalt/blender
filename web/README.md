@@ -21,6 +21,27 @@ web/build_blender.sh          # configures and builds into ../build_web
 | `build_deps.sh` | Builds the libraries Blender needs (zlib, png, jpeg, freetype, OpenEXR, OpenImageIO, OpenColorIO, TBB, ...). Pass package names to rebuild only those. |
 | `build_blender.sh` | Runs CMake with `build_files/cmake/config/blender_web.cmake` and builds. |
 
+## Run and test
+
+```bash
+web/build_bundle.sh                           # page + blender.js/.wasm + data files in ../build_web/bundle
+python3 web/tools/serve_isolated.py 8000 ../build_web/bundle   # serves with the headers below
+node web/tools/run_page.js http://localhost:8000/ shot.png 120000   # headless Chromium, WebGPU
+```
+
+Blender can also run without a browser, for background tasks (Cycles renders, Python):
+
+```bash
+node web/run_node.js ../build_web/bin/blender.js -b scene.blend -E CYCLES -f 1
+```
+
+Crashes print `wasm-function[N]` frames, `blender.js.symbols` (next to `blender.js`) maps
+`N` to function names.
+
+What works: loading and saving `.blend` files, Python and `bpy`, Cycles on the CPU (all
+threads), image formats of OpenImageIO. The UI draws with WebGPU
+(`source/blender/gpu/webgpu/`), which is still being brought up.
+
 ## How the build works
 
 - `build_files/cmake/platform/platform_emscripten.cmake` is used on top of
@@ -29,6 +50,10 @@ web/build_blender.sh          # configures and builds into ../build_web
 - Build tools that generate code (`makesdna`, `makesrna`, `datatoc`, ...) are compiled
   to WebAssembly too and run with Node.js (`-sNODERAWFS -sEXECUTABLE`). This way
   `makesdna` gets the struct layout of the real target, without a native build.
+- `main()` runs on a pthread (`-sPROXY_TO_PTHREAD`), the browser main thread handles DOM events
+  and WebGPU. GPU commands are recorded on Blender's threads and executed on the main thread.
+- Shaders are compiled from GLSL to WGSL inside Blender by glslang and Tint
+  (`web/shader_compiler/`, built by `build_deps.sh` from Dawn's sources).
 
 ## Hosting
 

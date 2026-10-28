@@ -273,6 +273,7 @@ struct WGDevice::ExecuteState {
   Vector<WGPUBindGroup> bind_groups;
   Vector<WGPUBuffer> temporary_buffers;
   Vector<WGPendingRead> reads;
+  Vector<WGObjectID> destroyed;
 };
 
 WGPUTexture WGDevice::texture_get(const WGObjectID texture, ExecuteState &state)
@@ -326,6 +327,18 @@ WGPUTextureView WGDevice::texture_view_get(const WGObjectID texture,
   WGPUTexture wgpu_texture = texture_get(texture, state);
   if (wgpu_texture == nullptr) {
     return nullptr;
+  }
+  /* Views of one aspect of depth-stencil textures use the format of that aspect. */
+  if (aspect == WGPUTextureAspect_DepthOnly) {
+    if (format == WGPUTextureFormat_Depth32FloatStencil8) {
+      format = WGPUTextureFormat_Depth32Float;
+    }
+    else if (format == WGPUTextureFormat_Depth24PlusStencil8) {
+      format = WGPUTextureFormat_Depth24Plus;
+    }
+  }
+  else if (aspect == WGPUTextureAspect_StencilOnly) {
+    format = WGPUTextureFormat_Stencil8;
   }
   WGPUTextureViewDescriptor desc = {};
   desc.format = format;
@@ -960,7 +973,8 @@ void WGDevice::execute(WGCommandStream &stream, void *wait_ctx)
         break;
       }
       case WGCommandType::Destroy: {
-        destroy_object(CMD(WGCmdDestroy).object);
+        /* Objects can still be used by the commands encoded so far, destroy after the submit. */
+        state.destroyed.append(CMD(WGCmdDestroy).object);
         break;
       }
       case WGCommandType::CopyStagingToBuffer: {
@@ -992,6 +1006,27 @@ void WGDevice::execute(WGCommandStream &stream, void *wait_ctx)
           dst.mipLevel = cmd.mip;
           dst.origin = {cmd.offset[0], cmd.offset[1], cmd.offset[2]};
           dst.aspect = cmd.aspect;
+          const WGPUExtent3D extent = {cmd.extent[0], cmd.extent[1], cmd.extent[2]};
+          wgpuCommandEncoderCopyBufferToTexture(state.encoder, &src, &dst, &extent);
+        }
+        break;
+      }
+      case WGCommandType::CopyBufferToTexture: {
+        const WGCmdCopyBufferToTexture &cmd = CMD(WGCmdCopyBufferToTexture);
+        WGPUBuffer buffer = buffer_get(cmd.buffer, state);
+        WGPUTexture texture = texture_get(cmd.texture, state);
+        if (buffer && texture) {
+          wg_interrupt_render_pass(state.render_pass, state.render_pass_id);
+          WGPUTexelCopyBufferInfo src = {};
+          src.buffer = buffer;
+          src.layout.offset = cmd.buffer_offset;
+          src.layout.bytesPerRow = cmd.bytes_per_row ? cmd.bytes_per_row :
+                                                       WGPU_COPY_STRIDE_UNDEFINED;
+          src.layout.rowsPerImage = WGPU_COPY_STRIDE_UNDEFINED;
+          WGPUTexelCopyTextureInfo dst = {};
+          dst.texture = texture;
+          dst.origin = {cmd.offset[0], cmd.offset[1], cmd.offset[2]};
+          dst.aspect = WGPUTextureAspect_All;
           const WGPUExtent3D extent = {cmd.extent[0], cmd.extent[1], cmd.extent[2]};
           wgpuCommandEncoderCopyBufferToTexture(state.encoder, &src, &dst, &extent);
         }
@@ -1124,6 +1159,9 @@ void WGDevice::execute(WGCommandStream &stream, void *wait_ctx)
   wgpuQueueSubmit(queue_, 1, &command_buffer);
   wgpuCommandBufferRelease(command_buffer);
   wgpuCommandEncoderRelease(state.encoder);
+  for (const WGObjectID id : state.destroyed) {
+    destroy_object(id);
+  }
 
   for (WGPUBindGroup bind_group : state.bind_groups) {
     wgpuBindGroupRelease(bind_group);
