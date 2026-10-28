@@ -3911,10 +3911,12 @@ static void rna_generate_struct_register_func(BlenderRNA * /*brna*/, StructRNA *
         f, "FunctionRNA *rna_%s_%s_func;\n", srna->identifier.c_str(), func->identifier.c_str());
   }
 
-  /* Struct and property creation runs on startup, on the first call to #RNA_blender_rna_get. */
+  /* Struct and property creation runs on startup, on the first call to #RNA_blender_rna_get.
+   * Not inlined: with unity builds, inlining all of them into #rna_blender_rna_create creates
+   * a function larger than WebAssembly engines accept (V8 limits functions to ~7.6 MB). */
   fprintf(f,
           "StructRNA *RNA_%s;\n"
-          "void register_struct_%s(BlenderRNA &brna)\n"
+          "BLI_NOINLINE void register_struct_%s(BlenderRNA &brna)\n"
           "{\n",
           srna->identifier.c_str(),
           srna->identifier.c_str());
