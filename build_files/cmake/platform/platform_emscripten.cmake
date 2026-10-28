@@ -68,9 +68,18 @@ function(blender_web_setup_host_tools)
 endfunction()
 
 # Flags for the `blender` executable itself, see `source/creator/CMakeLists.txt`.
+# - `blender.js` exports a factory function `BlenderModule(config)` (MODULARIZE),
+#   so the page or `web/run_node.js` controls arguments, files and start-up.
+# - `FS` is used by the page (and `web/run_node.js`) to provide files.
+# - NODEFS lets `web/run_node.js` mount host directories when testing with Node.js.
+# By default Binaryen inlines every function that has a single caller, whatever its size.
+# This merged all the generated `register_struct_*` functions into `rna_blender_rna_create`,
+# a function bigger than WebAssembly engines accept (~7.6 MB in V8 and SpiderMonkey).
 function(blender_web_setup_blender_target target)
   set_property(
     TARGET ${target} APPEND_STRING PROPERTY
-    LINK_FLAGS " ${PLATFORM_WEB_MEMORY_FLAGS} -sEXIT_RUNTIME=1 -sFORCE_FILESYSTEM=1"
+    LINK_FLAGS " ${PLATFORM_WEB_MEMORY_FLAGS} -sEXIT_RUNTIME=1 -sFORCE_FILESYSTEM=1 \
+-sMODULARIZE=1 -sEXPORT_NAME=BlenderModule -sEXPORTED_RUNTIME_METHODS=FS,ENV,NODEFS -lnodefs.js \
+-sBINARYEN_EXTRA_PASSES=--one-caller-inline-max-function-size=10000"
   )
 endfunction()
