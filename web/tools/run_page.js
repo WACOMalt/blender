@@ -4,7 +4,8 @@
 // timeout), then run the actions and take a screenshot.
 //
 // Actions are separated by ';': `click:X,Y`, `move:X,Y`, `key:KEY` (Playwright key names),
-// `type:TEXT`, `wait:MS` and `shot:FILE.png`.
+// `type:TEXT`, `wait:MS`, `shot:FILE.png`, `reload:` (keeps the browser storage) and
+// `drop:URL@X,Y` (drops the file at URL on the canvas).
 const { chromium } = require('playwright');
 (async () => {
   const [url, shot, timeoutMs, actions] = [process.argv[2], process.argv[3],
@@ -43,6 +44,21 @@ const { chromium } = require('playwright');
     }
     else if (name === 'shot') {
       await page.screenshot({ path: arg });
+    }
+    else if (name === 'reload') {
+      await page.reload();
+      await page.waitForTimeout(timeoutMs);
+    }
+    else if (name === 'drop') {
+      const [fileUrl, position] = arg.split('@');
+      const [x, y] = position.split(',').map(Number);
+      await page.evaluate(async ([fileUrl, x, y]) => {
+        const bytes = await (await fetch(fileUrl)).arrayBuffer();
+        const transfer = new DataTransfer();
+        transfer.items.add(new File([bytes], fileUrl.substring(fileUrl.lastIndexOf('/') + 1)));
+        document.getElementById('canvas').dispatchEvent(
+            new DragEvent('drop', { dataTransfer: transfer, clientX: x, clientY: y, bubbles: true }));
+      }, [fileUrl, x, y]);
     }
   }
   await page.waitForTimeout(500);

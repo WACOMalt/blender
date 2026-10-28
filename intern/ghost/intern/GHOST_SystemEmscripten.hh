@@ -20,6 +20,7 @@
 #include <deque>
 #include <mutex>
 #include <string>
+#include <vector>
 
 class GHOST_WindowEmscripten;
 
@@ -35,6 +36,8 @@ struct GHOST_WebEvent {
     Resize,
     Focus,
     Blur,
+    /** Files dropped on the canvas, written to the file-system by the page. */
+    Drop,
   };
   Type type;
   uint64_t time_ms;
@@ -49,6 +52,8 @@ struct GHOST_WebEvent {
   char key[32];
   bool repeat;
   bool shift, ctrl, alt, meta;
+  /** File-system paths of dropped files. */
+  std::vector<std::string> paths;
 };
 
 class GHOST_SystemEmscripten : public GHOST_System {

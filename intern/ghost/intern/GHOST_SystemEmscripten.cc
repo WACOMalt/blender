@@ -10,6 +10,7 @@
 #include "GHOST_ContextNone.hh"
 #include "GHOST_EventButton.hh"
 #include "GHOST_EventCursor.hh"
+#include "GHOST_EventDragnDrop.hh"
 #include "GHOST_EventKey.hh"
 #include "GHOST_EventWheel.hh"
 #include "GHOST_TimerManager.hh"
@@ -517,6 +518,23 @@ void GHOST_SystemEmscripten::processWebEvent(const GHOST_WebEvent &event)
           std::make_unique<GHOST_Event>(event.time_ms, GHOST_kEventWindowDeactivate, window));
       break;
     }
+    case GHOST_WebEvent::Type::Drop: {
+      GHOST_TStringArray *files = static_cast<GHOST_TStringArray *>(
+          malloc(sizeof(GHOST_TStringArray)));
+      files->count = int(event.paths.size());
+      files->strings = static_cast<uint8_t **>(malloc(sizeof(uint8_t *) * event.paths.size()));
+      for (size_t i = 0; i < event.paths.size(); i++) {
+        files->strings[i] = reinterpret_cast<uint8_t *>(strdup(event.paths[i].c_str()));
+      }
+      pushEvent(std::make_unique<GHOST_EventDragnDrop>(event.time_ms,
+                                                       GHOST_kEventDraggingDropDone,
+                                                       GHOST_kDragnDropTypeFilenames,
+                                                       window,
+                                                       event.x,
+                                                       event.y,
+                                                       files));
+      break;
+    }
   }
 }
 
@@ -671,3 +689,35 @@ GHOST_IWindow *GHOST_SystemEmscripten::getWindowUnderCursor(int32_t /*x*/, int32
 }
 
 /** \} */
+
+/**
+ * Called by the page (`web/shell/blender_loader.js`) on the browser's main thread when files are
+ * dropped on the canvas, after writing them to the file-system. `paths` are separated by new
+ * lines, the position is in canvas pixels.
+ */
+extern "C" EMSCRIPTEN_KEEPALIVE void ghost_web_drop_files(int x, int y, const char *paths)
+{
+  GHOST_SystemEmscripten *system = static_cast<GHOST_SystemEmscripten *>(
+      GHOST_ISystem::getSystem());
+  if (system == nullptr || paths == nullptr) {
+    return;
+  }
+  GHOST_WebEvent event = {};
+  event.type = GHOST_WebEvent::Type::Drop;
+  event.time_ms = system->getMilliSeconds();
+  event.x = x;
+  event.y = y;
+  const std::string all_paths = paths;
+  size_t start = 0;
+  while (start < all_paths.size()) {
+    size_t end = all_paths.find('\n', start);
+    if (end == std::string::npos) {
+      end = all_paths.size();
+    }
+    if (end > start) {
+      event.paths.push_back(all_paths.substr(start, end - start));
+    }
+    start = end + 1;
+  }
+  system->queueWebEvent(event);
+}

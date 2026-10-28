@@ -75,6 +75,7 @@ endfunction()
 #   so the page or `web/run_node.js` controls arguments, files and start-up.
 # - `FS` is used by the page (and `web/run_node.js`) to provide files.
 # - NODEFS lets `web/run_node.js` mount host directories when testing with Node.js.
+# - IDBFS keeps the files of the page's user (preferences, saved files) in IndexedDB.
 # - `blender.js.symbols` maps function indices to names, to read stack traces of optimized builds.
 # By default Binaryen inlines every function that has a single caller, whatever its size.
 # This merged all the generated `register_struct_*` functions into `rna_blender_rna_create`,
@@ -84,7 +85,9 @@ function(blender_web_setup_blender_target target)
     TARGET ${target} APPEND_STRING PROPERTY
     LINK_FLAGS " ${PLATFORM_WEB_MEMORY_FLAGS} -sEXIT_RUNTIME=1 -sFORCE_FILESYSTEM=1 \
 -sPROXY_TO_PTHREAD=1 -sPTHREAD_POOL_SIZE=navigator.hardwareConcurrency \
--sMODULARIZE=1 -sEXPORT_NAME=BlenderModule -sEXPORTED_RUNTIME_METHODS=FS,ENV,NODEFS -lnodefs.js \
+-sMODULARIZE=1 -sEXPORT_NAME=BlenderModule \
+-sEXPORTED_RUNTIME_METHODS=FS,ENV,NODEFS,IDBFS,ccall,addRunDependency,removeRunDependency \
+-lnodefs.js -lidbfs.js \
 -sBINARYEN_EXTRA_PASSES=--one-caller-inline-max-function-size=10000 --emit-symbol-map"
   )
 endfunction()
