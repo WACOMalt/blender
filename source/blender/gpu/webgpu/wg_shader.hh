@@ -17,7 +17,9 @@
 
 #pragma once
 
+#include <memory>
 #include <mutex>
+#include <string>
 
 #include "BLI_map.hh"
 #include "BLI_vector.hh"
@@ -45,6 +47,8 @@ struct WGRenderPipelineKey {
   uint64_t vertex_layout_hash = 0;
   /** Hash of the specialization constant values. */
   uint64_t constants_hash = 0;
+  /** Hash of the #WGPointVariant, zero for other draws. */
+  uint64_t point_variant_hash = 0;
 
   bool operator==(const WGRenderPipelineKey &other) const;
   uint64_t hash() const;
@@ -55,6 +59,40 @@ struct WGVertexLayout {
   Vector<WGVertexAttribute, 16> attributes;
 
   uint64_t hash() const;
+};
+
+/**
+ * WebGPU points are always one pixel. Shaders that set a point size have a variant to draw points
+ * as quads (two triangles per point). The variant reads the vertex attributes from storage
+ * buffers, so it depends on the vertex layout.
+ *
+ * Bindings of the variant (in group 0), besides the bindings of the shader:
+ * - Vertex buffers at `WG_POINT_BINDING + i`.
+ * - The index buffer at `WG_POINT_BINDING + WG_MAX_VERTEX_BUFFERS`.
+ * - #WGPointDrawData at `WG_POINT_BINDING + WG_MAX_VERTEX_BUFFERS + 1`.
+ */
+struct WGPointVariant {
+  uint64_t hash = 0;
+  WGObjectID vertex_module = WG_NULL_ID;
+  WGObjectID bind_group_layout = WG_NULL_ID;
+  WGObjectID pipeline_layout = WG_NULL_ID;
+};
+
+constexpr uint32_t WG_POINT_BINDING = 900;
+constexpr uint32_t WG_POINT_INDEX_BINDING = WG_POINT_BINDING + WG_MAX_VERTEX_BUFFERS;
+constexpr uint32_t WG_POINT_DRAW_DATA_BINDING = WG_POINT_INDEX_BINDING + 1;
+
+/** Uniform data of a point variant draw, std140 layout. */
+struct WGPointDrawData {
+  /** First index (or vertex for non indexed draws). */
+  int32_t first;
+  int32_t base_vertex;
+  int32_t _pad[2];
+  /** One over the viewport size. */
+  float viewport_inv_size[2];
+  float _pad2[2];
+  /** Offsets (in bytes) of the vertex buffers from the start of their binding. */
+  uint32_t vertex_buffer_offsets[WG_MAX_VERTEX_BUFFERS];
 };
 
 /** Hash of specialization constant values, zero when there are none. */
@@ -81,6 +119,24 @@ class WGShader : public Shader {
 
   /** Push constants, std140 layout. */
   Vector<uint8_t> push_constants_data_;
+
+  /** Entries of the bind group layouts. */
+  Vector<WGBindingLayout> bind_group_entries_;
+
+  /** Vertex inputs, needed by the point variants. */
+  struct VertexInput {
+    uint32_t location;
+    shader::Type type;
+    std::string name;
+  };
+  Vector<VertexInput> vertex_inputs_;
+  /** GLSL of the vertex shader for point variants, empty when the shader has no point size. */
+  std::string point_vertex_glsl_;
+  WGObjectID point_fragment_module_ = WG_NULL_ID;
+  /** Location of the point coordinates passed to the fragment shader of point variants. */
+  uint32_t point_coord_location_ = 0;
+  /** Point variants by vertex layout, null when the layout isn't supported. */
+  Map<uint64_t, std::unique_ptr<WGPointVariant>> point_variants_;
 
  public:
   WGShader(const char *name);
@@ -152,7 +208,20 @@ class WGShader : public Shader {
    */
   WGObjectID render_pipeline_get(const WGRenderPipelineKey &key,
                                  const WGVertexLayout &vertex_layout,
-                                 const shader::SpecializationConstants *constants);
+                                 const shader::SpecializationConstants *constants,
+                                 const WGPointVariant *point_variant = nullptr);
+
+  /** True when points must be drawn with a point variant to have the size set by the shader. */
+  bool has_point_size() const
+  {
+    return !point_vertex_glsl_.empty();
+  }
+  /**
+   * Variant drawing points as quads for the vertex layout and index format
+   * (#WGPUIndexFormat_Undefined for non indexed draws). Null when not supported.
+   */
+  const WGPointVariant *point_variant_get(const WGVertexLayout &vertex_layout,
+                                          WGPUIndexFormat index_format);
   WGObjectID compute_pipeline_get(const shader::SpecializationConstants *constants);
 
  private:
@@ -161,6 +230,9 @@ class WGShader : public Shader {
                     int stage,
                     WGObjectID &r_module);
   Vector<uint8_t> pipeline_constants(const shader::SpecializationConstants *constants) const;
+  WGObjectID module_from_glsl(const std::string &glsl, int stage);
+  std::unique_ptr<WGPointVariant> point_variant_create(const WGVertexLayout &vertex_layout,
+                                                       WGPUIndexFormat index_format);
 };
 
 }  // namespace blender::gpu

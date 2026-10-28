@@ -579,17 +579,42 @@ std::string WGShader::resources_declare(const ShaderCreateInfo &info) const
   return ss.str();
 }
 
+/** Number of locations used by the outputs of the vertex shader. */
+static int wg_varying_locations(const ShaderCreateInfo &info)
+{
+  int location = 0;
+  for (const StageInterfaceInfo *iface : info.vertex_out_interfaces_) {
+    for (const StageInterfaceInfo::InOut &inout : iface->inouts) {
+      location += get_location_count(inout.type);
+    }
+  }
+  if (flag_is_set(info.builtins_combined(), BuiltinBits::CLIP_DISTANCES)) {
+    location += 6;
+  }
+  return location;
+}
+
 std::string WGShader::vertex_interface_declare(const ShaderCreateInfo &info) const
 {
   std::stringstream ss;
   std::string pre_main;
   std::string post_main;
 
-  /* Inputs. */
+  /* Inputs, read from storage buffers by the variant that expands points (see
+   * #WGShader::point_variant_get). */
+  ss << "#ifndef WG_POINT_EXPANSION\n";
   for (const ShaderCreateInfo::VertIn &attr : info.vertex_inputs_) {
     ss << "layout(location = " << attr.index << ") ";
     ss << "in " << to_string(attr.type) << " " << attr.name << ";\n";
   }
+  ss << "#else\n";
+  for (const ShaderCreateInfo::VertIn &attr : info.vertex_inputs_) {
+    ss << to_string(attr.type) << " " << attr.name << ";\n";
+  }
+  ss << "void wg_point_fetch();\n";
+  ss << "void wg_point_expand();\n";
+  ss << "layout(location=" << wg_varying_locations(info) << ") out vec2 wg_point_coord;\n";
+  ss << "#endif\n";
   /* Interfaces. */
   int location = 0;
   for (const StageInterfaceInfo *iface : info.vertex_out_interfaces_) {
@@ -602,6 +627,9 @@ std::string WGShader::vertex_interface_declare(const ShaderCreateInfo &info) con
     pre_main += "#define gl_ClipDistance wg_ClipDistance\n";
     location += 6;
   }
+  pre_main += "#ifdef WG_POINT_EXPANSION\n";
+  pre_main += "  wg_point_fetch();\n";
+  pre_main += "#endif\n";
 
   /* Layered rendering isn't supported, writes are ignored. */
   if (flag_is_set(info.builtins_combined(), BuiltinBits::LAYER)) {
@@ -615,6 +643,9 @@ std::string WGShader::vertex_interface_declare(const ShaderCreateInfo &info) con
   /* Retarget depth from -1..1 to 0..1 and flip Y (see file description of `wg_shader.hh`). */
   post_main += "gl_Position.z = (gl_Position.z + gl_Position.w) * 0.5;\n";
   post_main += "gl_Position.y = -gl_Position.y;\n";
+  post_main += "#ifdef WG_POINT_EXPANSION\n";
+  post_main += "  wg_point_expand();\n";
+  post_main += "#endif\n";
 
   ss << main_function_wrapper(pre_main, post_main);
   return ss.str();
@@ -642,6 +673,9 @@ std::string WGShader::fragment_interface_declare(const ShaderCreateInfo &info) c
     ss << "layout(location=" << location << ") in float wg_ClipDistance[6];\n";
     location += 6;
   }
+  ss << "#ifdef WG_POINT_EXPANSION\n";
+  ss << "layout(location=" << location << ") in vec2 wg_point_coord;\n";
+  ss << "#endif\n";
 
   if (flag_is_set(info.builtins_combined(), BuiltinBits::LAYER)) {
     ss << "#define gpu_Layer 0\n";
@@ -743,14 +777,25 @@ static std::string wg_glsl_patch(const char *stage_define)
   ss << "#define GPU_PROVOKING_VERTEX_LAST\n";
   ss << stage_define;
   if (STREQ(stage_define, "#define GPU_VERTEX_SHADER\n")) {
-    /* WebGPU points are always one pixel, Tint only accepts constant point sizes. */
-    ss << "float wg_PointSize;\n";
+    /* WebGPU points are always one pixel, Tint only accepts constant point sizes.
+     * Larger points are drawn as quads by a variant of the shader. */
+    ss << "float wg_PointSize = 1.0;\n";
     ss << "#define gl_PointSize wg_PointSize\n";
+    ss << "#ifdef WG_POINT_EXPANSION\n";
+    /* The vertex index of the point, the real one is the index of the quad's vertex. */
+    ss << "int wg_quad_vertex_index() { return gl_VertexIndex; }\n";
+    ss << "int wg_vertex_index;\n";
+    ss << "#define gl_VertexIndex wg_vertex_index\n";
+    ss << "#endif\n";
   }
 
   if (STREQ(stage_define, "#define GPU_FRAGMENT_SHADER\n")) {
+    ss << "#ifdef WG_POINT_EXPANSION\n";
+    ss << "#define gl_PointCoord wg_point_coord\n";
+    ss << "#else\n";
     /* WebGPU points are always one pixel, without point coordinates. */
     ss << "#define gl_PointCoord vec2(0.5)\n";
+    ss << "#endif\n";
   }
 
   shader::GeneratedSourceList sources{
@@ -971,6 +1016,14 @@ WGShader::~WGShader()
   for (WGObjectID pipeline : compute_pipelines_.values()) {
     wg_object_destroy(pipeline);
   }
+  for (const std::unique_ptr<WGPointVariant> &variant : point_variants_.values()) {
+    if (variant) {
+      wg_object_destroy(variant->pipeline_layout);
+      wg_object_destroy(variant->bind_group_layout);
+      wg_object_destroy(variant->vertex_module);
+    }
+  }
+  wg_object_destroy(point_fragment_module_);
   wg_object_destroy(pipeline_layout_);
   wg_object_destroy(bind_group_layouts_[0]);
   wg_object_destroy(bind_group_layouts_[1]);
@@ -1009,6 +1062,56 @@ static bool glsl_uses_integer_samplers(const ShaderCreateInfo &info)
   return false;
 }
 
+/** Samplers use the binding of their texture in the sampler group. */
+static Vector<WSC_SamplerMapping> wg_sampler_mappings(const WGShaderInterface &interface)
+{
+  Vector<WSC_SamplerMapping> sampler_mappings;
+  for (const WGResourceBinding &resource : interface.resources()) {
+    if (ELEM(resource.type,
+             WGResourceBinding::Type::Sampler,
+             WGResourceBinding::Type::SubpassInput))
+    {
+      sampler_mappings.append({0, resource.binding, WG_SAMPLER_GROUP, resource.binding});
+    }
+  }
+  return sampler_mappings;
+}
+
+/** Add a define after the `#version` line. */
+static std::string wg_glsl_define(const std::string &glsl, const char *define)
+{
+  const size_t version_end = glsl.find('\n') + 1;
+  return glsl.substr(0, version_end) + "#define " + define + "\n" + glsl.substr(version_end);
+}
+
+/** Translate GLSL to a WGSL module, for variants (errors are only logged). */
+WGObjectID WGShader::module_from_glsl(const std::string &glsl, const int stage)
+{
+  const Vector<WSC_SamplerMapping> sampler_mappings = wg_sampler_mappings(interface_get());
+  WSC_Result result = WSC_glsl_to_wgsl(glsl.c_str(),
+                                       WSC_Stage(stage),
+                                       sampler_mappings.data(),
+                                       int(sampler_mappings.size()));
+  if (result.wgsl == nullptr) {
+    CLOG_WARN(&LOG, "Shader %s: variant failed to compile:\n%s", name, result.log);
+    if (G.debug & G_DEBUG_GPU) {
+      printf("WebGPU GLSL of %s (variant):\n%s\nEND OF GLSL\n", name, glsl.c_str());
+    }
+    WSC_result_free(&result);
+    return WG_NULL_ID;
+  }
+  const WGObjectID module = wg_object_id_alloc();
+  {
+    WGRecord record;
+    record.stream.push(WGCommandType::CreateShaderModule,
+                       WGCmdCreateShaderModule{module},
+                       result.wgsl,
+                       strlen(result.wgsl) + 1);
+  }
+  WSC_result_free(&result);
+  return module;
+}
+
 void WGShader::build_module(const ShaderCreateInfo &info,
                             MutableSpan<StringRefNull> sources,
                             const int stage,
@@ -1024,27 +1127,41 @@ void WGShader::build_module(const ShaderCreateInfo &info,
   if (glsl_uses_integer_samplers(info)) {
     patch += WG_INTEGER_TEXTURE_FUNCTIONS;
   }
+  bool uses_point_size = false;
   for (const int i : sources.index_range().drop_front(1)) {
     if (sources[i].find("samplerBuffer") != StringRef::not_found) {
       patch += WG_BUFFER_TEXTURE_FUNCTIONS;
       break;
     }
   }
+  if (stage == WSC_STAGE_VERTEX) {
+    for (const int i : sources.index_range().drop_front(1)) {
+      if (sources[i].find("gl_PointSize") != StringRef::not_found) {
+        uses_point_size = true;
+        break;
+      }
+    }
+  }
   sources[SOURCES_INDEX_VERSION] = patch;
   std::string glsl = fmt::to_string(fmt::join(sources, ""));
   wg_glsl_workarounds(info, glsl);
 
-  /* Samplers use the binding of their texture in the sampler group. */
-  Vector<WSC_SamplerMapping> sampler_mappings;
-  for (const WGResourceBinding &resource : interface_get().resources()) {
-    if (ELEM(resource.type,
-             WGResourceBinding::Type::Sampler,
-             WGResourceBinding::Type::SubpassInput))
-    {
-      sampler_mappings.append({0, resource.binding, WG_SAMPLER_GROUP, resource.binding});
+  if (stage == WSC_STAGE_VERTEX && uses_point_size) {
+    for (const ShaderCreateInfo::VertIn &attr : info.vertex_inputs_) {
+      vertex_inputs_.append({uint32_t(attr.index), attr.type, attr.name});
+    }
+    point_vertex_glsl_ = wg_glsl_define(glsl, "WG_POINT_EXPANSION");
+    point_coord_location_ = uint32_t(wg_varying_locations(info));
+  }
+  if (stage == WSC_STAGE_FRAGMENT && has_point_size()) {
+    point_fragment_module_ = module_from_glsl(wg_glsl_define(glsl, "WG_POINT_EXPANSION"),
+                                              stage);
+    if (point_fragment_module_ == WG_NULL_ID) {
+      point_vertex_glsl_.clear();
     }
   }
 
+  const Vector<WSC_SamplerMapping> sampler_mappings = wg_sampler_mappings(interface_get());
   WSC_Result result = WSC_glsl_to_wgsl(glsl.c_str(),
                                        WSC_Stage(stage),
                                        sampler_mappings.data(),
@@ -1131,6 +1248,8 @@ bool WGShader::finalize(const ShaderCreateInfo *info)
       group_entries[1].append(sampler);
     }
   }
+
+  bind_group_entries_ = group_entries[0];
 
   WGRecord record;
   for (int group : IndexRange(2)) {
@@ -1439,7 +1558,8 @@ static void wg_blend_state(const GPUBlend blend,
 
 WGObjectID WGShader::render_pipeline_get(const WGRenderPipelineKey &key,
                                          const WGVertexLayout &vertex_layout,
-                                         const SpecializationConstants *constants)
+                                         const SpecializationConstants *constants,
+                                         const WGPointVariant *point_variant)
 {
   std::lock_guard lock(pipelines_mutex_);
   if (const WGObjectID *pipeline = render_pipelines_.lookup_ptr(key)) {
@@ -1449,9 +1569,9 @@ WGObjectID WGShader::render_pipeline_get(const WGRenderPipelineKey &key,
   const GPUState state{.data = key.state};
   WGCmdCreateRenderPipeline cmd = {};
   cmd.pipeline = wg_object_id_alloc();
-  cmd.layout = pipeline_layout_;
-  cmd.vertex_module = vertex_module_;
-  cmd.fragment_module = fragment_module_;
+  cmd.layout = point_variant ? point_variant->pipeline_layout : pipeline_layout_;
+  cmd.vertex_module = point_variant ? point_variant->vertex_module : vertex_module_;
+  cmd.fragment_module = point_variant ? point_fragment_module_ : fragment_module_;
   cmd.topology = key.topology;
   cmd.strip_index_format = key.strip_index_format;
   /* Y is flipped by the vertex shader, which flips the winding. */
@@ -1468,9 +1588,8 @@ WGObjectID WGShader::render_pipeline_get(const WGRenderPipelineKey &key,
       break;
   }
   /* Line and point topologies can't be culled. */
-  if (!ELEM(key.topology,
-            WGPUPrimitiveTopology_TriangleList,
-            WGPUPrimitiveTopology_TriangleStrip))
+  if (point_variant ||
+      !ELEM(key.topology, WGPUPrimitiveTopology_TriangleList, WGPUPrimitiveTopology_TriangleStrip))
   {
     cmd.cull_mode = WGPUCullMode_None;
   }
@@ -1521,17 +1640,20 @@ WGObjectID WGShader::render_pipeline_get(const WGRenderPipelineKey &key,
     }
   }
   cmd.sample_count = key.sample_count;
-  cmd.vertex_buffers_len = vertex_layout.buffers.size();
-  cmd.attributes_len = vertex_layout.attributes.size();
 
   const Vector<uint8_t> constants_data = pipeline_constants(constants);
   cmd.constants_len = constants_data.size() / sizeof(WGPipelineConstant);
 
   Vector<uint8_t> trailing;
-  trailing.extend(Span(reinterpret_cast<const uint8_t *>(vertex_layout.buffers.data()),
-                       vertex_layout.buffers.size() * sizeof(WGVertexBufferLayout)));
-  trailing.extend(Span(reinterpret_cast<const uint8_t *>(vertex_layout.attributes.data()),
-                       vertex_layout.attributes.size() * sizeof(WGVertexAttribute)));
+  /* Point variants read the vertex buffers as storage buffers. */
+  if (point_variant == nullptr) {
+    cmd.vertex_buffers_len = vertex_layout.buffers.size();
+    cmd.attributes_len = vertex_layout.attributes.size();
+    trailing.extend(Span(reinterpret_cast<const uint8_t *>(vertex_layout.buffers.data()),
+                         vertex_layout.buffers.size() * sizeof(WGVertexBufferLayout)));
+    trailing.extend(Span(reinterpret_cast<const uint8_t *>(vertex_layout.attributes.data()),
+                         vertex_layout.attributes.size() * sizeof(WGVertexAttribute)));
+  }
   trailing.extend(constants_data);
   {
     WGRecord record;
@@ -1564,6 +1686,276 @@ WGObjectID WGShader::compute_pipeline_get(const SpecializationConstants *constan
   }
   compute_pipelines_.add(key, cmd.pipeline);
   return cmd.pipeline;
+}
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Point Variants
+ * \{ */
+
+/**
+ * GLSL expression reading an attribute of format `format` at word `w` of `buffer`, as a 4
+ * component vector (missing components are 0, except the 4th which is 1, like vertex fetching).
+ * Returns an empty string for unsupported formats.
+ */
+static std::string wg_attribute_fetch(const WGPUVertexFormat format,
+                                      const std::string &buffer,
+                                      const std::string &w)
+{
+  const std::string word0 = buffer + "[" + w + "]";
+  const std::string word1 = buffer + "[" + w + " + 1u]";
+  const std::string word2 = buffer + "[" + w + " + 2u]";
+  const std::string word3 = buffer + "[" + w + " + 3u]";
+  auto f = [](const std::string &word) { return "uintBitsToFloat(" + word + ")"; };
+  auto i = [](const std::string &word) { return "int(" + word + ")"; };
+  auto bits = [](const std::string &word, const int offset, const int len) {
+    return "bitfieldExtract(int(" + word + "), " + std::to_string(offset) + ", " +
+           std::to_string(len) + ")";
+  };
+  switch (format) {
+    case WGPUVertexFormat_Float32:
+      return "vec4(" + f(word0) + ", 0.0, 0.0, 1.0)";
+    case WGPUVertexFormat_Float32x2:
+      return "vec4(" + f(word0) + ", " + f(word1) + ", 0.0, 1.0)";
+    case WGPUVertexFormat_Float32x3:
+      return "vec4(" + f(word0) + ", " + f(word1) + ", " + f(word2) + ", 1.0)";
+    case WGPUVertexFormat_Float32x4:
+      return "vec4(" + f(word0) + ", " + f(word1) + ", " + f(word2) + ", " + f(word3) + ")";
+    case WGPUVertexFormat_Uint32:
+      return "uvec4(" + word0 + ", 0u, 0u, 1u)";
+    case WGPUVertexFormat_Uint32x2:
+      return "uvec4(" + word0 + ", " + word1 + ", 0u, 1u)";
+    case WGPUVertexFormat_Uint32x3:
+      return "uvec4(" + word0 + ", " + word1 + ", " + word2 + ", 1u)";
+    case WGPUVertexFormat_Uint32x4:
+      return "uvec4(" + word0 + ", " + word1 + ", " + word2 + ", " + word3 + ")";
+    case WGPUVertexFormat_Sint32:
+      return "ivec4(" + i(word0) + ", 0, 0, 1)";
+    case WGPUVertexFormat_Sint32x2:
+      return "ivec4(" + i(word0) + ", " + i(word1) + ", 0, 1)";
+    case WGPUVertexFormat_Sint32x3:
+      return "ivec4(" + i(word0) + ", " + i(word1) + ", " + i(word2) + ", 1)";
+    case WGPUVertexFormat_Sint32x4:
+      return "ivec4(" + i(word0) + ", " + i(word1) + ", " + i(word2) + ", " + i(word3) + ")";
+    case WGPUVertexFormat_Unorm8x4:
+      return "unpackUnorm4x8(" + word0 + ")";
+    case WGPUVertexFormat_Snorm8x4:
+      return "unpackSnorm4x8(" + word0 + ")";
+    case WGPUVertexFormat_Uint8x4:
+      return "uvec4(" + word0 + " & 0xFFu, (" + word0 + " >> 8u) & 0xFFu, (" + word0 +
+             " >> 16u) & 0xFFu, " + word0 + " >> 24u)";
+    case WGPUVertexFormat_Sint8x4:
+      return "ivec4(" + bits(word0, 0, 8) + ", " + bits(word0, 8, 8) + ", " + bits(word0, 16, 8) +
+             ", " + bits(word0, 24, 8) + ")";
+    case WGPUVertexFormat_Unorm16x2:
+      return "vec4(unpackUnorm2x16(" + word0 + "), 0.0, 1.0)";
+    case WGPUVertexFormat_Unorm16x4:
+      return "vec4(unpackUnorm2x16(" + word0 + "), unpackUnorm2x16(" + word1 + "))";
+    case WGPUVertexFormat_Snorm16x2:
+      return "vec4(unpackSnorm2x16(" + word0 + "), 0.0, 1.0)";
+    case WGPUVertexFormat_Snorm16x4:
+      return "vec4(unpackSnorm2x16(" + word0 + "), unpackSnorm2x16(" + word1 + "))";
+    case WGPUVertexFormat_Float16x2:
+      return "vec4(unpackHalf2x16(" + word0 + "), 0.0, 1.0)";
+    case WGPUVertexFormat_Float16x4:
+      return "vec4(unpackHalf2x16(" + word0 + "), unpackHalf2x16(" + word1 + "))";
+    case WGPUVertexFormat_Uint16x2:
+      return "uvec4(" + word0 + " & 0xFFFFu, " + word0 + " >> 16u, 0u, 1u)";
+    case WGPUVertexFormat_Uint16x4:
+      return "uvec4(" + word0 + " & 0xFFFFu, " + word0 + " >> 16u, " + word1 + " & 0xFFFFu, " +
+             word1 + " >> 16u)";
+    case WGPUVertexFormat_Sint16x2:
+      return "ivec4(" + bits(word0, 0, 16) + ", " + bits(word0, 16, 16) + ", 0, 1)";
+    case WGPUVertexFormat_Sint16x4:
+      return "ivec4(" + bits(word0, 0, 16) + ", " + bits(word0, 16, 16) + ", " +
+             bits(word1, 0, 16) + ", " + bits(word1, 16, 16) + ")";
+    case WGPUVertexFormat_Unorm10_10_10_2:
+      return "(vec4(" + word0 + " & 1023u, (" + word0 + " >> 10u) & 1023u, (" + word0 +
+             " >> 20u) & 1023u, " + word0 + " >> 30u) / vec4(1023.0, 1023.0, 1023.0, 3.0))";
+    default:
+      return "";
+  }
+}
+
+std::unique_ptr<WGPointVariant> WGShader::point_variant_create(const WGVertexLayout &vertex_layout,
+                                                               const WGPUIndexFormat index_format)
+{
+  const WGPULimits &limits = WGBackend::get().device.info().limits;
+  const bool is_indexed = index_format != WGPUIndexFormat_Undefined;
+
+  /* Storage buffers of the vertex stage must stay within the limits. */
+  uint32_t storage_buffers_len = uint32_t(vertex_layout.buffers.size()) + (is_indexed ? 1 : 0);
+  uint32_t uniform_buffers_len = 1;
+  for (const WGBindingLayout &entry : bind_group_entries_) {
+    if (!(entry.visibility & WGPUShaderStage_Vertex)) {
+      continue;
+    }
+    if (ELEM(entry.kind,
+             WGBindingLayout::Kind::StorageBuffer,
+             WGBindingLayout::Kind::ReadOnlyStorageBuffer))
+    {
+      storage_buffers_len++;
+    }
+    else if (entry.kind == WGBindingLayout::Kind::UniformBuffer) {
+      uniform_buffers_len++;
+    }
+  }
+  if (storage_buffers_len > limits.maxStorageBuffersPerShaderStage ||
+      uniform_buffers_len > limits.maxUniformBuffersPerShaderStage ||
+      vertex_layout.buffers.size() > WG_MAX_VERTEX_BUFFERS ||
+      point_coord_location_ >= limits.maxInterStageShaderVariables)
+  {
+    return nullptr;
+  }
+
+  std::stringstream ss;
+  ss << "\n";
+  for (const int buffer_index : vertex_layout.buffers.index_range()) {
+    ss << "layout(binding = " << WG_POINT_BINDING + buffer_index << ", std430) readonly buffer "
+       << "wg_vbo_" << buffer_index << "_ { uint wg_vbo_" << buffer_index << "[]; };\n";
+  }
+  if (is_indexed) {
+    ss << "layout(binding = " << WG_POINT_INDEX_BINDING
+       << ", std430) readonly buffer wg_ibo_ { uint wg_ibo[]; };\n";
+  }
+  ss << "layout(binding = " << WG_POINT_DRAW_DATA_BINDING << ", std140) uniform wg_point_draw_ {\n";
+  ss << "  ivec4 wg_point_draw;\n";
+  ss << "  vec4 wg_point_viewport;\n";
+  ss << "  uvec4 wg_vbo_offsets[" << WG_MAX_VERTEX_BUFFERS / 4 << "];\n";
+  ss << "};\n";
+  ss << "bool wg_point_skip = false;\n";
+
+  /* Read the vertex attributes, `wg_vertex_index` is the vertex of the point. */
+  ss << "void wg_point_fetch() {\n";
+  ss << "  uint point = uint(wg_quad_vertex_index()) / 6u;\n";
+  ss << "  uint index = uint(wg_point_draw.x) + point;\n";
+  if (index_format == WGPUIndexFormat_Uint32) {
+    ss << "  uint vertex = wg_ibo[index];\n";
+    ss << "  wg_point_skip = vertex == 0xFFFFFFFFu;\n";
+    ss << "  vertex = uint(int(vertex) + wg_point_draw.y);\n";
+  }
+  else if (index_format == WGPUIndexFormat_Uint16) {
+    ss << "  uint word = wg_ibo[index >> 1u];\n";
+    ss << "  uint vertex = ((index & 1u) != 0u) ? (word >> 16u) : (word & 0xFFFFu);\n";
+    ss << "  wg_point_skip = vertex == 0xFFFFu;\n";
+    ss << "  vertex = uint(int(vertex) + wg_point_draw.y);\n";
+  }
+  else {
+    ss << "  uint vertex = index;\n";
+  }
+  ss << "  wg_vertex_index = int(vertex);\n";
+  ss << "  uint instance = uint(gl_InstanceIndex);\n";
+  for (const int buffer_index : vertex_layout.buffers.index_range()) {
+    const WGVertexBufferLayout &buffer = vertex_layout.buffers[buffer_index];
+    if (buffer.stride % 4 != 0) {
+      return nullptr;
+    }
+    const std::string buffer_name = "wg_vbo_" + std::to_string(buffer_index);
+    for (const WGVertexAttribute &attribute :
+         vertex_layout.attributes.as_span().slice(buffer.attributes_start, buffer.attributes_len))
+    {
+      if (attribute.offset % 4 != 0) {
+        return nullptr;
+      }
+      const VertexInput *input = nullptr;
+      for (const VertexInput &vertex_input : vertex_inputs_) {
+        if (vertex_input.location == attribute.location) {
+          input = &vertex_input;
+        }
+      }
+      if (input == nullptr) {
+        continue;
+      }
+      const std::string fetch = wg_attribute_fetch(attribute.format, buffer_name, "w");
+      const int component_len = to_component_count(input->type);
+      if (fetch.empty() || component_len > 4 ||
+          ELEM(input->type, Type::bool_t, Type::float3x3_t, Type::float4x4_t))
+      {
+        return nullptr;
+      }
+      const char *swizzle[] = {"", "x", "xy", "xyz", "xyzw"};
+      ss << "  {\n";
+      ss << "    uint w = ("
+         << (buffer.step_mode == WGPUVertexStepMode_Instance ? "instance" : "vertex") << " * "
+         << buffer.stride << "u + " << attribute.offset << "u + wg_vbo_offsets["
+         << buffer_index / 4 << "][" << buffer_index % 4 << "]) >> 2u;\n";
+      ss << "    " << input->name << " = " << to_string(input->type) << "((" << fetch << ")."
+         << swizzle[component_len] << ");\n";
+      ss << "  }\n";
+    }
+  }
+  ss << "}\n";
+
+  /* Move the vertices to the corners of the point, two triangles per point. */
+  ss << "void wg_point_expand() {\n";
+  ss << "  const vec2 corners[6] = vec2[6](vec2(-1.0, -1.0), vec2(1.0, -1.0), vec2(-1.0, 1.0),\n";
+  ss << "                                  vec2(-1.0, 1.0), vec2(1.0, -1.0), vec2(1.0, 1.0));\n";
+  ss << "  vec2 corner = corners[uint(wg_quad_vertex_index()) % 6u];\n";
+  ss << "  gl_Position.xy += corner * wg_PointSize * wg_point_viewport.xy * gl_Position.w;\n";
+  ss << "  wg_point_coord = corner * 0.5 + 0.5;\n";
+  ss << "  if (wg_point_skip) {\n";
+  ss << "    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);\n";
+  ss << "  }\n";
+  ss << "}\n";
+
+  std::unique_ptr<WGPointVariant> variant = std::make_unique<WGPointVariant>();
+  variant->vertex_module = module_from_glsl(point_vertex_glsl_ + ss.str(), WSC_STAGE_VERTEX);
+  if (variant->vertex_module == WG_NULL_ID) {
+    return nullptr;
+  }
+
+  Vector<WGBindingLayout> entries = bind_group_entries_;
+  auto add_entry = [&](const uint32_t binding, const WGBindingLayout::Kind kind) {
+    WGBindingLayout entry = {};
+    entry.binding = binding;
+    entry.kind = kind;
+    entry.visibility = WGPUShaderStage_Vertex;
+    entries.append(entry);
+  };
+  for (const int buffer_index : vertex_layout.buffers.index_range()) {
+    add_entry(WG_POINT_BINDING + buffer_index, WGBindingLayout::Kind::ReadOnlyStorageBuffer);
+  }
+  if (is_indexed) {
+    add_entry(WG_POINT_INDEX_BINDING, WGBindingLayout::Kind::ReadOnlyStorageBuffer);
+  }
+  add_entry(WG_POINT_DRAW_DATA_BINDING, WGBindingLayout::Kind::UniformBuffer);
+
+  WGRecord record;
+  variant->bind_group_layout = wg_object_id_alloc();
+  record.stream.push(
+      WGCommandType::CreateBindGroupLayout,
+      WGCmdCreateBindGroupLayout{variant->bind_group_layout, uint32_t(entries.size())},
+      entries.data(),
+      entries.size() * sizeof(WGBindingLayout));
+  variant->pipeline_layout = wg_object_id_alloc();
+  WGCmdCreatePipelineLayout cmd = {};
+  cmd.layout = variant->pipeline_layout;
+  cmd.bind_group_layouts[0] = variant->bind_group_layout;
+  cmd.bind_group_layouts[1] = bind_group_layouts_[1];
+  record.stream.push(WGCommandType::CreatePipelineLayout, cmd);
+  return variant;
+}
+
+const WGPointVariant *WGShader::point_variant_get(const WGVertexLayout &vertex_layout,
+                                                  const WGPUIndexFormat index_format)
+{
+  if (!has_point_size() || point_fragment_module_ == WG_NULL_ID) {
+    return nullptr;
+  }
+  const uint64_t hash = vertex_layout.hash() * 33 ^ uint64_t(index_format);
+  std::lock_guard lock(pipelines_mutex_);
+  return point_variants_
+      .lookup_or_add_cb(hash,
+                        [&]() {
+                          std::unique_ptr<WGPointVariant> variant = point_variant_create(
+                              vertex_layout, index_format);
+                          if (variant) {
+                            variant->hash = hash;
+                          }
+                          return variant;
+                        })
+      .get();
 }
 
 /** \} */

@@ -502,6 +502,63 @@ static void wg_resources_resolve_stream_data(WGShader &shader,
   }
 }
 
+/**
+ * Bind the vertex and index buffers as storage buffers of a point variant, and turn the draw
+ * into a non indexed draw of two triangles per point. The recorder must be locked.
+ */
+static void wg_point_variant_resources(const WGDrawCall &call,
+                                       WGCommandStream &stream,
+                                       const uint64_t stream_vertex_offset,
+                                       WGCmdDraw &cmd,
+                                       WGPendingResources &pending)
+{
+  const uint64_t alignment = WGBackend::get().device.info().limits.minStorageBufferOffsetAlignment;
+
+  WGPointDrawData data = {};
+  data.first = int32_t(call.first);
+  data.base_vertex = call.base_vertex;
+  data.viewport_inv_size[0] = 1.0f / max_ff(cmd.viewport[2], 1.0f);
+  data.viewport_inv_size[1] = 1.0f / max_ff(cmd.viewport[3], 1.0f);
+
+  auto add_buffer = [&](const uint32_t binding, const WGObjectID buffer, const uint64_t offset) {
+    WGBindingResource resource = {};
+    resource.group = 0;
+    resource.binding = binding;
+    resource.kind = WGBindingLayout::Kind::ReadOnlyStorageBuffer;
+    resource.object = buffer;
+    resource.offset = offset;
+    resource.size = 0;
+    pending.resources.append(resource);
+  };
+  for (const int i : call.vertex_buffers.index_range()) {
+    uint64_t offset = call.vertex_buffers[i].offset;
+    if (call.vertex_buffers[i].buffer == WG_STREAM_DATA_ID) {
+      offset += stream_vertex_offset;
+    }
+    const uint64_t aligned_offset = offset - offset % alignment;
+    data.vertex_buffer_offsets[i] = uint32_t(offset - aligned_offset);
+    add_buffer(WG_POINT_BINDING + i, call.vertex_buffers[i].buffer, aligned_offset);
+  }
+  if (call.index_buffer != WG_NULL_ID) {
+    add_buffer(WG_POINT_INDEX_BINDING, call.index_buffer, 0);
+  }
+
+  WGBindingResource resource = {};
+  resource.group = 0;
+  resource.binding = WG_POINT_DRAW_DATA_BINDING;
+  resource.kind = WGBindingLayout::Kind::UniformBuffer;
+  resource.object = WG_STREAM_DATA_ID;
+  resource.offset = stream.staging_push(&data, sizeof(data));
+  resource.size = sizeof(data);
+  pending.resources.append(resource);
+
+  cmd.vertex_buffers_len = 0;
+  cmd.index_buffer = WG_NULL_ID;
+  cmd.first = 0;
+  cmd.count = call.count * 6;
+  cmd.base_vertex = 0;
+}
+
 /** \} */
 
 /* -------------------------------------------------------------------- */
@@ -558,12 +615,30 @@ void WGContext::draw(const WGDrawCall &call)
   key.sample_count = 1;
   key.vertex_layout_hash = call.vertex_layout.hash();
   key.constants_hash = wg_constants_hash(constants_ ? constants_ : wg_shader->constants.get());
-  const WGObjectID pipeline = wg_shader->render_pipeline_get(key, call.vertex_layout, constants_);
+
+  /* WebGPU points are one pixel, draw them as quads when the shader sets their size.
+   * TODO: Indirect draws, the vertex count would need to be multiplied on the GPU. */
+  const WGPointVariant *point_variant = nullptr;
+  if (call.prim_type == GPU_PRIM_POINTS && call.indirect_buffer == WG_NULL_ID &&
+      wg_shader->has_point_size())
+  {
+    point_variant = wg_shader->point_variant_get(
+        call.vertex_layout,
+        call.index_buffer != WG_NULL_ID ? call.index_format : WGPUIndexFormat_Undefined);
+  }
+  if (point_variant) {
+    key.topology = WGPUPrimitiveTopology_TriangleList;
+    key.strip_index_format = WGPUIndexFormat_Undefined;
+    key.point_variant_hash = point_variant->hash;
+  }
+  const WGObjectID pipeline = wg_shader->render_pipeline_get(
+      key, call.vertex_layout, constants_, point_variant);
 
   WGCmdDraw cmd = {};
   cmd.pass_id = pass_id;
   cmd.pipeline = pipeline;
-  cmd.pipeline_layout = wg_shader->pipeline_layout_get();
+  cmd.pipeline_layout = point_variant ? point_variant->pipeline_layout :
+                                        wg_shader->pipeline_layout_get();
   cmd.vertex_buffers_len = uint32_t(min_ii(call.vertex_buffers.size(), WG_MAX_VERTEX_BUFFERS));
   cmd.index_buffer = call.index_buffer;
   cmd.index_format = call.index_format;
@@ -595,6 +670,9 @@ void WGContext::draw(const WGDrawCall &call)
     if (cmd.vertex_buffers[i].buffer == WG_STREAM_DATA_ID) {
       cmd.vertex_buffers[i].offset += stream_vertex_offset;
     }
+  }
+  if (point_variant) {
+    wg_point_variant_resources(call, record.stream, stream_vertex_offset, cmd, pending);
   }
   cmd.resources_len = uint32_t(pending.resources.size());
   record.stream.push(WGCommandType::Draw,
