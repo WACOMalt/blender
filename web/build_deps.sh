@@ -72,7 +72,8 @@ cmake_build() {
 build_zlib() {
   fetch_url zlib https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz
   cmake_build zlib "$SRC/zlib" -DZLIB_BUILD_EXAMPLES=OFF
-  # Static-only consumers look for libz.a; zlib installs no shared lib under emscripten.
+  # zlib always builds a shared library, remove it so everything links the static one.
+  rm -f "$PREFIX"/lib/libz.so*
 }
 
 build_zstd() {
@@ -94,11 +95,22 @@ build_jpeg() {
     -DENABLE_SHARED=OFF -DENABLE_STATIC=ON -DWITH_SIMD=OFF -DWITH_JPEG8=ON -DWITH_TURBOJPEG=OFF
 }
 
+build_brotli() {
+  fetch_git brotli https://github.com/google/brotli v1.0.9
+  cmake_build brotli "$SRC/brotli" -DBROTLI_DISABLE_TESTS=ON
+  # Brotli's CMake installs nothing when targeting Emscripten.
+  cp "$BUILD"/brotli/libbrotli{common,dec,enc}-static.a "$PREFIX/lib/"
+  cp -r "$SRC/brotli/c/include/brotli" "$PREFIX/include/"
+}
+
 build_freetype() {
   fetch_url freetype http://prdownloads.sourceforge.net/freetype/freetype-2.13.3.tar.gz
+  # Brotli is required for the WOFF2 fonts used by Blender's UI.
   cmake_build freetype "$SRC/freetype" \
-    -DFT_DISABLE_BZIP2=ON -DFT_DISABLE_HARFBUZZ=ON -DFT_DISABLE_BROTLI=ON \
-    -DFT_REQUIRE_ZLIB=ON -DFT_REQUIRE_PNG=ON
+    -DFT_DISABLE_BZIP2=ON -DFT_DISABLE_HARFBUZZ=ON \
+    -DFT_REQUIRE_ZLIB=ON -DFT_REQUIRE_PNG=ON -DFT_REQUIRE_BROTLI=ON \
+    -DBROTLIDEC_INCLUDE_DIRS="$PREFIX/include" \
+    -DBROTLIDEC_LIBRARIES="$PREFIX/lib/libbrotlidec-static.a;$PREFIX/lib/libbrotlicommon-static.a"
 }
 
 build_fmt() {
@@ -209,20 +221,56 @@ build_openimageio() {
     -DOpenImageIO_REQUIRED_DEPS="libjpeg-turbo;TIFF;OpenEXR;PNG;fmt;Robinmap;ZLIB"
 }
 
-ALL_PACKAGES=(zlib zstd png jpeg freetype fmt eigen imath deflate openjph openexr tbb tiff robinmap
-              expat yamlcpp pystring minizipng opencolorio openimageio)
-
-packages=("$@")
-[ ${#packages[@]} -eq 0 ] && packages=("${ALL_PACKAGES[@]}")
-
-for pkg in "${packages[@]}"; do
-  stamp="$PREFIX/.built-$pkg"
-  if [ -f "$stamp" ] && [ $# -eq 0 ]; then
-    echo "== $pkg: already built"
-    continue
+build_python() {
+  fetch_git python https://github.com/python/cpython v3.13.13
+  local src="$SRC/python"
+  # Cross-compiling needs a native Python of the same version.
+  local native="$BUILD/python-native"
+  if [ ! -x "$native/python" ]; then
+    mkdir -p "$native"
+    (cd "$native" && "$src/configure" --without-ensurepip -q && make -j "$JOBS" -s)
   fi
-  echo "== $pkg: building"
-  "build_$pkg"
-  touch "$stamp"
-done
-echo "Dependencies installed in $PREFIX"
+  local host="$BUILD/python"
+  mkdir -p "$host"
+  (
+    cd "$host"
+    # The stdlib extension modules are linked statically into libpython,
+    # there is no dynamic loading in the Blender WebAssembly build.
+    # bz2 and sqlite3 would use Emscripten ports, downloaded from GitHub archives at build time.
+    CONFIG_SITE="$src/Tools/wasm/config.site-wasm32-emscripten" \
+      py_cv_module__bz2=n/a py_cv_module__sqlite3=n/a \
+      emconfigure "$src/configure" \
+        --host=wasm32-unknown-emscripten --build="$("$src/config.guess")" \
+        --with-emscripten-target=browser --enable-wasm-pthreads --disable-wasm-dynamic-linking \
+        --with-build-python="$native/python" --without-ensurepip --disable-ipv6 --disable-test-modules \
+        --disable-shared --prefix="$PREFIX" \
+        CFLAGS="$WEB_FLAGS" LDFLAGS="$WEB_FLAGS" \
+        ZLIB_CFLAGS="-I$PREFIX/include" ZLIB_LIBS="-L$PREFIX/lib -lz"
+    emmake make -j "$JOBS"
+    emmake make install
+  )
+}
+
+ALL_PACKAGES=(zlib zstd png jpeg brotli freetype fmt eigen imath deflate openjph openexr tbb tiff robinmap
+              expat yamlcpp pystring minizipng opencolorio openimageio python)
+
+main() {
+  local packages=("$@")
+  [ ${#packages[@]} -eq 0 ] && packages=("${ALL_PACKAGES[@]}")
+  local pkg stamp
+  for pkg in "${packages[@]}"; do
+    stamp="$PREFIX/.built-$pkg"
+    if [ -f "$stamp" ] && [ $# -eq 0 ]; then
+      echo "== $pkg: already built"
+      continue
+    fi
+    echo "== $pkg: building"
+    "build_$pkg"
+    touch "$stamp"
+  done
+  echo "Dependencies installed in $PREFIX"
+}
+
+# Parsed in full before running, so editing this file during a build is safe.
+main "$@"
+exit

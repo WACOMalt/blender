@@ -141,7 +141,10 @@ target_link_libraries(bf_deps_png INTERFACE ${PNG_LIBRARIES})
 # Configure OpenImageIO
 
 add_library(bf::dependencies::openimageio ALIAS OpenImageIO::OpenImageIO)
-get_target_property(OPENIMAGEIO_TOOL OpenImageIO::oiiotool LOCATION)
+if(TARGET OpenImageIO::oiiotool)
+  # Only used for tests.
+  get_target_property(OPENIMAGEIO_TOOL OpenImageIO::oiiotool LOCATION)
+endif()
 
 # -----------------------------------------------------------------------------
 # Configure USD

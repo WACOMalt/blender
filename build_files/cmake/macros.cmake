@@ -673,11 +673,16 @@ endfunction()
 
 function(test_neon_support)
   if(NOT DEFINED SUPPORTS_NEON_BUILD)
-    include(CheckCXXSourceCompiles)
-    check_cxx_source_compiles(
-      "#include <arm_neon.h>
-       int main() {return vaddvq_s32(vdupq_n_s32(1));}"
-      SUPPORTS_NEON_BUILD)
+    if(EMSCRIPTEN)
+      # Emscripten emulates NEON on top of WebAssembly SIMD, don't use it as a native target.
+      set(SUPPORTS_NEON_BUILD OFF CACHE INTERNAL "")
+    else()
+      include(CheckCXXSourceCompiles)
+      check_cxx_source_compiles(
+        "#include <arm_neon.h>
+         int main() {return vaddvq_s32(vdupq_n_s32(1));}"
+        SUPPORTS_NEON_BUILD)
+    endif()
   endif()
 endfunction()
 

@@ -46,6 +46,7 @@ set(WITH_LINKER_LLD            OFF CACHE BOOL "" FORCE)
 set(WITH_BLENDER_THUMBNAILER   OFF CACHE BOOL "" FORCE)
 set(WITH_INTERNATIONAL         OFF CACHE BOOL "" FORCE)
 set(WITH_BUILDINFO             OFF CACHE BOOL "" FORCE)
+set(WITH_GPU_SHADER_CPP_COMPILATION OFF CACHE BOOL "" FORCE)
 
 # Optional libraries built by `web/build_deps.sh`.
 set(WITH_TBB                   ON  CACHE BOOL "" FORCE)

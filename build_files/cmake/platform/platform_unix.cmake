@@ -202,7 +202,7 @@ if(NOT WITH_SYSTEM_FREETYPE)
     mark_as_advanced(freetype_DIR)
   endif()
 
-  if(DEFINED LIBDIR)
+  if(DEFINED LIBDIR OR EMSCRIPTEN)
     find_package_wrapper(Brotli REQUIRED)
 
     # NOTE: This is done on WIN32 & APPLE but fails on some Linux systems.
