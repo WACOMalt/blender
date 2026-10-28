@@ -68,6 +68,9 @@ function(blender_web_setup_host_tools)
 endfunction()
 
 # Flags for the `blender` executable itself, see `source/creator/CMakeLists.txt`.
+# - `main()` runs on a pthread (PROXY_TO_PTHREAD): Blender's main loop blocks, which the
+#   browser's main thread must not. The browser's main thread handles DOM events and WebGPU.
+# - Workers for all CPU cores are started up-front, creating them later is asynchronous.
 # - `blender.js` exports a factory function `BlenderModule(config)` (MODULARIZE),
 #   so the page or `web/run_node.js` controls arguments, files and start-up.
 # - `FS` is used by the page (and `web/run_node.js`) to provide files.
@@ -79,6 +82,7 @@ function(blender_web_setup_blender_target target)
   set_property(
     TARGET ${target} APPEND_STRING PROPERTY
     LINK_FLAGS " ${PLATFORM_WEB_MEMORY_FLAGS} -sEXIT_RUNTIME=1 -sFORCE_FILESYSTEM=1 \
+-sPROXY_TO_PTHREAD=1 -sPTHREAD_POOL_SIZE=navigator.hardwareConcurrency \
 -sMODULARIZE=1 -sEXPORT_NAME=BlenderModule -sEXPORTED_RUNTIME_METHODS=FS,ENV,NODEFS -lnodefs.js \
 -sBINARYEN_EXTRA_PASSES=--one-caller-inline-max-function-size=10000"
   )

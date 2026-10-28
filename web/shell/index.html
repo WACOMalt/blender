@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blender</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1d1d1d; }
+  /* The canvas fills the page from the top left corner, GHOST relies on this for coordinates. */
+  #canvas { position: fixed; left: 0; top: 0; width: 100vw; height: 100vh; display: block; outline: none; }
+  #overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
+             justify-content: center; gap: 12px; color: #d8d8d8; font: 14px system-ui, sans-serif;
+             background: #1d1d1d; }
+  #overlay.hidden { display: none; }
+  #progress { width: min(360px, 80vw); height: 4px; background: #303030; border-radius: 2px; overflow: hidden; }
+  #progress-bar { width: 0; height: 100%; background: #4772b3; transition: width 0.1s; }
+  #status { max-width: 80vw; text-align: center; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<canvas id="canvas" tabindex="0"></canvas>
+<div id="overlay">
+  <div id="status">Loading Blender…</div>
+  <div id="progress"><div id="progress-bar"></div></div>
+</div>
+<script src="blender.js"></script>
+<script src="blender_loader.js"></script>
+</body>
+</html>
