@@ -11,6 +11,8 @@
 #include "BLI_math_base.hh"
 #include "BLI_vector.hh"
 
+#include "CLG_log.h"
+
 #include "vk_data_conversion.hh"
 
 #include "wg_backend.hh"
@@ -20,6 +22,8 @@
 #include "wg_texture.hh"
 
 namespace blender::gpu {
+
+static CLG_LogRef LOG = {"gpu.webgpu"};
 
 static bool wg_format_is_compressed(const TextureFormat format)
 {
@@ -224,6 +228,34 @@ void WGTexture::update_sub(int mip,
                            uint unpack_row_length)
 {
   if (!is_usable() || data == nullptr) {
+    return;
+  }
+  if (format_flag_ & GPU_FORMAT_DEPTH) {
+    /* WebGPU can't copy to depth textures, only clear them. Uploads of a single value (default
+     * depth textures) are clears. */
+    const size_t texel_size = to_bytesize(format_, format);
+    const size_t texels = size_t(max_ii(extent[0], 1)) * max_ii(extent[1], 1) *
+                          max_ii(extent[2], 1);
+    const uint8_t *bytes = static_cast<const uint8_t *>(data);
+    bool is_uniform = true;
+    for (size_t i = 1; i < texels && is_uniform; i++) {
+      is_uniform = memcmp(bytes, bytes + i * texel_size, texel_size) == 0;
+    }
+    if (!is_uniform) {
+      CLOG_WARN(&LOG, "Texture %s: uploading depth data is not supported", name_.c_str());
+      return;
+    }
+    double4 clear_value(0.0);
+    if (format == GPU_DATA_FLOAT) {
+      clear_value[0] = *reinterpret_cast<const float *>(data);
+    }
+    else if (format == GPU_DATA_UINT_24_8_DEPRECATED || format == GPU_DATA_UINT) {
+      /* Normalized 24 bit depth with 8 bit stencil. */
+      const uint32_t value = *reinterpret_cast<const uint32_t *>(data);
+      clear_value[0] = double(value >> 8) / double(0xFFFFFF);
+      clear_value[1] = double(value & 0xFF);
+    }
+    clear(clear_value);
     return;
   }
   /* Rows (and 1D array layers) are copied in WebGPU's layout. */

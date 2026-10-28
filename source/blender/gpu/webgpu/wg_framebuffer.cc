@@ -9,6 +9,8 @@
 #include "BLI_math_base.hh"
 #include "BLI_string.hh"
 
+#include "GPU_texture.hh"
+
 #include "wg_common.hh"
 #include "wg_context.hh"
 #include "wg_framebuffer.hh"
@@ -67,9 +69,20 @@ void WGFrameBuffer::bind(bool enabled_srgb)
     context->active_fb = this;
   }
   if (dirty_attachments_) {
+    /* The size comes from the attachments. */
+    for (const GPUAttachment &attachment : attachments_) {
+      if (attachment.tex) {
+        int size[3];
+        GPU_texture_get_mipmap_size(attachment.tex, attachment.mip, size);
+        size_set(size[0], size[1]);
+        break;
+      }
+    }
     dirty_attachments_ = false;
     render_pass_record_end();
   }
+  viewport_reset();
+  scissor_reset();
   if (use_explicit_load_store_) {
     /* Load operations are set after binding, they apply to a new pass. */
     render_pass_end();

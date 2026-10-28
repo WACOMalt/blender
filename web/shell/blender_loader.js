@@ -7,7 +7,8 @@
 // Blender's run-time files are packed by `web/package_data.py` into `blender-data.bin`
 // (with the `blender-data.json` index) and written to the in-memory file-system before `main()`.
 //
-// Command line arguments can be passed for testing, e.g. `?args=-b,--python-expr,print(1)`.
+// Command line arguments can be passed for testing, e.g. `?args=-b,--python-expr,print(1)`,
+// `?fetch=` adds files from the server to Blender's file-system.
 'use strict';
 
 (async () => {
@@ -76,6 +77,11 @@
 
   const params = new URLSearchParams(location.search);
   const args = params.has('args') ? params.get('args').split(',') : [];
+  /* Extra files for testing, e.g. `?fetch=tests/script.py&args=--python,/tests/script.py`. */
+  const extra_files = [];
+  for (const path of params.has('fetch') ? params.get('fetch').split(',') : []) {
+    extra_files.push([path, new Uint8Array(await (await fetch(path)).arrayBuffer())]);
+  }
 
   const config = {
     canvas: document.getElementById('canvas'),
@@ -90,6 +96,11 @@
           FS.writeFile(path, data.subarray(offset, offset + size));
         }
         data = null;
+        for (const [path, bytes] of extra_files) {
+          const fs_path = '/' + path;
+          FS.mkdirTree(fs_path.substring(0, fs_path.lastIndexOf('/')));
+          FS.writeFile(fs_path, bytes);
+        }
       },
     ],
     onRuntimeInitialized: () => {
