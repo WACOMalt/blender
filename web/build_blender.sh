@@ -20,11 +20,17 @@ JOBS="${JOBS:-$(nproc)}"
 command -v emcmake >/dev/null || { echo "emcmake not found; run: source web/setup_emsdk.sh" >&2; exit 1; }
 [ -d "$DEPS/install" ] || { echo "No dependencies in $DEPS/install; run web/build_deps.sh" >&2; exit 1; }
 
+CCACHE_ARGS=()
+if command -v ccache >/dev/null; then
+  CCACHE_ARGS=(-DWITH_COMPILER_CCACHE=ON)
+fi
+
 emcmake cmake -S "$ROOT" -B "$BUILD" -G Ninja \
   -C "$ROOT/build_files/cmake/config/blender_web.cmake" \
   -DCMAKE_BUILD_TYPE=Release \
   -DEMSCRIPTEN_SYSTEM_PROCESSOR=wasm32 \
   -DCMAKE_PREFIX_PATH="$DEPS/install" \
   -DCMAKE_FIND_ROOT_PATH="$DEPS/install" \
+  "${CCACHE_ARGS[@]}" \
   "$@"
 cmake --build "$BUILD" -j "$JOBS"
