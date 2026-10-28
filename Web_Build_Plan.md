@@ -6,7 +6,9 @@ Hosting/deployment (blender.bsums.xyz) is handled by the repo owner and is out o
 
 Status: **Phase 2 done, Phase 3 in progress.** The Emscripten toolchain, all
 dependencies (including CPython 3.13) and the CMake platform support work, see
-`web/README.md`. Headless Blender is being brought up (fixes for 32 bit WebAssembly).
+`web/README.md`. Headless Blender runs under node (loads `.blend` files, Python works).
+Cycles (CPU) is being enabled. The windowed build has a GHOST backend for the canvas and a
+WebGPU GPU backend in `source/blender/gpu/webgpu/` (written, being brought up in Chromium).
 
 Decisions by the repo owner (2026-10-28):
 - GPU: **WebGPU is the primary backend, with a reduced WebGL2 fallback** for browsers without WebGPU.
@@ -80,6 +82,21 @@ Decisions by the repo owner (2026-10-28):
   `processEvents` on Blender's thread drains it.
 - Testing: `web/tools/serve_isolated.py` (COOP/COEP headers) and `web/tools/run_page.js`
   (headless Chromium with a software WebGPU adapter).
+
+### WebGPU backend design (`source/blender/gpu/webgpu/`)
+
+- All GPU calls record into one command stream (`wg_commands.hh`), executed by `WGDevice` on the
+  browser main thread. Objects are ids allocated when recording, so nothing waits for creation.
+  Uploads go to the stream's staging data; uniform buffers and push constants are copied into it
+  per stream so their updates stay ordered with the draws.
+- Shaders: Vulkan style GLSL (same generation as the Vulkan backend) → glslang → SPIR-V → Tint →
+  WGSL (`web/shader_compiler/`, compiled to WebAssembly and linked into Blender). Push constants
+  become a uniform buffer, samplers are in bind group 1 at the binding of their texture.
+- Y is flipped in the vertex shader so textures have the same memory layout as on other
+  backends; the window framebuffer is copied to the canvas with a flip when presenting.
+- Clears before the first draw of a pass are load operations, other clears are draws.
+- Not supported yet: geometry shaders, layered rendering, barycentric coordinates, buffer
+  textures, 1D array textures, image atomics, wide points, triangle fans in batches.
 
 ## 3. Dependency strategy
 

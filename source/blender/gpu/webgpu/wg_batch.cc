@@ -28,9 +28,10 @@ bool WGBatch::draw_call_prepare(WGDrawCall &r_call)
     if (vbo == nullptr) {
       continue;
     }
-    const WGBufferBinding binding = vbo->binding_ensure();
+    const GPUVertFormat *format;
+    const WGBufferBinding binding = vbo->vertex_binding_ensure(format);
     wg_vertex_layout_add(
-        vbo->format, binding.buffer, vbo->vertex_len, false, interface, occupied, r_call);
+        *format, binding.buffer, vbo->vertex_len, false, interface, occupied, r_call);
   }
   wg_vertex_layout_finish(interface, occupied, r_call);
 

@@ -58,6 +58,14 @@ struct WGBufferBinding {
 
 class WGVertBuf : public VertBuf {
   WGBuffer buffer_;
+  /**
+   * Copy of the data with attributes WebGPU can't read as vertex attributes (10 bit normals)
+   * converted to a supported type, used as vertex buffer. Storage buffer bindings use the
+   * original data.
+   */
+  WGBuffer converted_buffer_;
+  GPUVertFormat converted_format_ = {};
+  bool has_converted_ = false;
 
  public:
   void bind_as_ssbo(uint binding) override;
@@ -69,6 +77,8 @@ class WGVertBuf : public VertBuf {
 
   /** Upload the data when needed, returns the binding of the buffer. */
   WGBufferBinding binding_ensure();
+  /** Binding and format of the buffer when used for vertex attributes. */
+  WGBufferBinding vertex_binding_ensure(const GPUVertFormat *&r_format);
 
  protected:
   void acquire_data() override;

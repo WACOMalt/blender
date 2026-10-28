@@ -6,6 +6,9 @@
  * \ingroup gpu
  */
 
+#include <algorithm>
+#include <cmath>
+
 #include "MEM_guardedalloc.h"
 
 #include "BLI_math_base.hh"
@@ -131,12 +134,104 @@ void WGVertBuf::resize_data()
 void WGVertBuf::release_data()
 {
   buffer_.free();
+  converted_buffer_.free();
+  has_converted_ = false;
   MEM_SAFE_DELETE(data_);
 }
 
 void WGVertBuf::upload_data()
 {
   binding_ensure();
+}
+
+static bool wg_format_needs_conversion(const GPUVertFormat &format)
+{
+  for (uint32_t i = 0; i < format.attr_len; i++) {
+    if (format.attrs[i].type.format == VertAttrType::SNORM_10_10_10_2) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static int16_t wg_snorm_bits_to_snorm16(const uint32_t bits, const int bit_count)
+{
+  /* Sign extend. */
+  const int32_t value = int32_t(bits << (32 - bit_count)) >> (32 - bit_count);
+  const int32_t max_value = (1 << (bit_count - 1)) - 1;
+  const float normalized = std::max(float(value) / float(max_value), -1.0f);
+  return int16_t(std::round(normalized * 32767.0f));
+}
+
+/**
+ * Convert the 10 bit normals of `format` to 16 bits per component, returns the converted data.
+ */
+static Vector<uint8_t> wg_convert_vertex_data(const GPUVertFormat &format,
+                                              const uint8_t *data,
+                                              const uint32_t vertex_len,
+                                              GPUVertFormat &r_format)
+{
+  r_format = format;
+  /* Offsets of interleaved attributes grow by the size of the converted attributes before. */
+  uint32_t growth = 0;
+  Vector<uint32_t, 16> order(format.attr_len);
+  for (uint32_t i = 0; i < format.attr_len; i++) {
+    order[i] = i;
+  }
+  std::sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) {
+    return format.attrs[a].offset < format.attrs[b].offset;
+  });
+  for (const uint32_t i : order) {
+    r_format.attrs[i].offset = uint8_t(format.attrs[i].offset + growth);
+    if (format.attrs[i].type.format == VertAttrType::SNORM_10_10_10_2) {
+      r_format.attrs[i].type.format = VertAttrType::SNORM_16_16_16_16;
+      growth += 4;
+    }
+  }
+  r_format.stride = format.stride + growth;
+
+  Vector<uint8_t> result(size_t(r_format.stride) * vertex_len);
+  size_t src_section = 0, dst_section = 0;
+  for (uint32_t i = 0; i < format.attr_len; i++) {
+    const GPUVertAttr &src_attr = format.attrs[i];
+    const GPUVertAttr &dst_attr = r_format.attrs[i];
+    const size_t src_size = src_attr.type.size();
+    const size_t dst_size = dst_attr.type.size();
+    for (uint32_t v = 0; v < vertex_len; v++) {
+      const uint8_t *src = format.deinterleaved ?
+                               data + src_section + v * src_size :
+                               data + size_t(v) * format.stride + src_attr.offset;
+      uint8_t *dst = r_format.deinterleaved ?
+                         result.data() + dst_section + v * dst_size :
+                         result.data() + size_t(v) * r_format.stride + dst_attr.offset;
+      if (src_attr.type.format == VertAttrType::SNORM_10_10_10_2) {
+        uint32_t packed;
+        memcpy(&packed, src, sizeof(packed));
+        const int16_t components[4] = {wg_snorm_bits_to_snorm16(packed & 0x3FF, 10),
+                                       wg_snorm_bits_to_snorm16((packed >> 10) & 0x3FF, 10),
+                                       wg_snorm_bits_to_snorm16((packed >> 20) & 0x3FF, 10),
+                                       wg_snorm_bits_to_snorm16(packed >> 30, 2)};
+        memcpy(dst, components, sizeof(components));
+      }
+      else {
+        memcpy(dst, src, src_size);
+      }
+    }
+    src_section += src_size * vertex_len;
+    dst_section += dst_size * vertex_len;
+  }
+  return result;
+}
+
+WGBufferBinding WGVertBuf::vertex_binding_ensure(const GPUVertFormat *&r_format)
+{
+  const WGBufferBinding binding = binding_ensure();
+  if (has_converted_) {
+    r_format = &converted_format_;
+    return {converted_buffer_.id_get(), 0, converted_buffer_.size_get()};
+  }
+  r_format = &format;
+  return binding;
 }
 
 WGBufferBinding WGVertBuf::binding_ensure()
@@ -146,6 +241,13 @@ WGBufferBinding WGVertBuf::binding_ensure()
     buffer_.ensure(size);
     if (usage_ != GPU_USAGE_DEVICE_ONLY && data_) {
       buffer_.update(data_, size);
+      has_converted_ = wg_format_needs_conversion(format);
+      if (has_converted_) {
+        const Vector<uint8_t> converted = wg_convert_vertex_data(
+            format, data_, vertex_len, converted_format_);
+        converted_buffer_.ensure(converted.size());
+        converted_buffer_.update(converted.data(), converted.size());
+      }
     }
     if (usage_ == GPU_USAGE_STATIC) {
       MEM_SAFE_DELETE(data_);
