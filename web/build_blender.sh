@@ -31,6 +31,7 @@ emcmake cmake -S "$ROOT" -B "$BUILD" -G Ninja \
   -DEMSCRIPTEN_SYSTEM_PROCESSOR=wasm32 \
   -DCMAKE_PREFIX_PATH="$DEPS/install" \
   -DCMAKE_FIND_ROOT_PATH="$DEPS/install" \
+  -DPYTHON_ROOT_DIR="$DEPS/install" \
   "${CCACHE_ARGS[@]}" \
   "$@"
 cmake --build "$BUILD" -j "$JOBS"

@@ -51,6 +51,14 @@ set(WITH_GPU_SHADER_CPP_COMPILATION OFF CACHE BOOL "" FORCE)
 # Optional libraries built by `web/build_deps.sh`.
 set(WITH_TBB                   ON  CACHE BOOL "" FORCE)
 
+# Python is built by `web/build_deps.sh` (pass `-DPYTHON_ROOT_DIR`, see `web/build_blender.sh`).
+# Python packages with native code are not built for WebAssembly yet.
+set(WITH_PYTHON                ON  CACHE BOOL "" FORCE)
+set(WITH_PYTHON_INSTALL        ON  CACHE BOOL "" FORCE)
+set(WITH_PYTHON_NUMPY          OFF CACHE BOOL "" FORCE)
+set(WITH_PYTHON_INSTALL_NUMPY  OFF CACHE BOOL "" FORCE)
+set(WITH_PYTHON_INSTALL_REQUESTS OFF CACHE BOOL "" FORCE)
+set(WITH_PYTHON_INSTALL_ZSTANDARD OFF CACHE BOOL "" FORCE)
+
 # Bring-up stages, enabled as they are ported.
-set(WITH_PYTHON                OFF CACHE BOOL "" FORCE)
 set(WITH_CYCLES                OFF CACHE BOOL "" FORCE)
