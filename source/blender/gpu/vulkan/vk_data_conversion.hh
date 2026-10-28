@@ -12,7 +12,9 @@
 
 #include "gpu_texture_private.hh"
 
-#include "vk_common.hh"
+#ifdef WITH_VULKAN_BACKEND
+#  include "vk_common.hh"
+#endif
 
 namespace blender::gpu {
 struct VKWorkarounds;
