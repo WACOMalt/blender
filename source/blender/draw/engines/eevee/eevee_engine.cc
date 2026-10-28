@@ -8,6 +8,7 @@
 
 #include "BLI_rect.hh"
 
+#include "GPU_context.hh"
 #include "GPU_framebuffer.hh"
 
 #include "ED_screen.hh"
@@ -15,6 +16,7 @@
 
 #include "DRW_render.hh"
 
+#include "RE_engine.h"
 #include "RE_pipeline.h"
 
 #include "eevee_engine.h" /* Own include. */
@@ -43,6 +45,13 @@ using namespace blender::eevee;
 
 static void eevee_render(RenderEngine *engine, Depsgraph *depsgraph)
 {
+  /* The shaders of EEVEE can not be translated to WGSL yet. */
+  if (GPU_backend_get_type() == GPU_BACKEND_WEBGPU) {
+    RE_engine_report(
+        engine, RPT_ERROR, "EEVEE is not supported by the WebGPU backend yet, use Cycles");
+    return;
+  }
+
   Instance *instance = nullptr;
 
   auto eevee_render_to_image = [&](RenderEngine *engine, RenderLayer *layer, const rcti /*rect*/) {
