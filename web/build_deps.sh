@@ -245,14 +245,16 @@ build_python() {
         --with-build-python="$native/python" --without-ensurepip --disable-ipv6 --disable-test-modules \
         --disable-shared --prefix="$PREFIX" \
         CFLAGS="$WEB_FLAGS" LDFLAGS="$WEB_FLAGS" \
-        ZLIB_CFLAGS="-I$PREFIX/include" ZLIB_LIBS="-L$PREFIX/lib -lz"
+        ZLIB_CFLAGS="-I$PREFIX/include" ZLIB_LIBS="-L$PREFIX/lib -lz" \
+        --with-system-expat LIBEXPAT_CFLAGS="-I$PREFIX/include" LIBEXPAT_LDFLAGS="-L$PREFIX/lib -lexpat"
     emmake make -j "$JOBS"
     emmake make install
     # Some modules link helper libraries that are not part of libpython, add them so
-    # embedding Python only needs libpython. CPython prefixes the bundled expat symbols.
+    # embedding Python only needs libpython (and expat, which Blender links already:
+    # CPython's bundled copy would clash with it).
     local objs
     objs="$(mktemp -d)"
-    for lib in Modules/_decimal/libmpdec/libmpdec.a Modules/expat/libexpat.a Modules/_hacl/libHacl_Hash_SHA2.a; do
+    for lib in Modules/_decimal/libmpdec/libmpdec.a Modules/_hacl/libHacl_Hash_SHA2.a; do
       (cd "$objs" && emar x "$host/$lib")
     done
     # Append (q), never replace (r): libmpdec has a `context.o` like CPython itself.

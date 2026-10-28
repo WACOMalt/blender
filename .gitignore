@@ -92,3 +92,8 @@ blendcache_*
 
 # WebAssembly build trees (see web/).
 /build_web*/
+
+# Prototype build outputs.
+/web/prototypes/*/*.js
+/web/prototypes/*/*.wasm
+!/web/prototypes/*/build.sh

@@ -66,6 +66,21 @@ Decisions by the repo owner (2026-10-28):
   `GHOST_ContextVK` (creates the device in GHOST, hands it to the GPU module) is the model for
   a WebGPU context. `WM_main` loop needs ASYNCIFY or a proxied pthread main thread.
 
+### Threading model (validated by `web/prototypes/webgpu_proxy`, 2026-10-28)
+
+- `main()` runs on a pthread (`-sPROXY_TO_PTHREAD`), so `WM_main` keeps its blocking loop and
+  Blender code can wait on locks; the browser main thread stays free.
+- WebGPU lives on the **browser main thread**: its asynchronous results (adapter/device,
+  buffer mapping for readback, shader compilation info) are promises, which only resolve on a
+  thread that returns to its event loop. Blender's thread sends batched work there and blocks
+  when it needs a result (`emscripten_proxy_sync_with_ctx`, finished from the WebGPU callback).
+  This matches the Vulkan backend's design (render graph recorded on Blender threads, submitted
+  separately). The prototype clears the canvas and reads back pixels synchronously in Chromium.
+- Input: DOM event handlers (browser main thread) push into a queue in shared memory, GHOST's
+  `processEvents` on Blender's thread drains it.
+- Testing: `web/tools/serve_isolated.py` (COOP/COEP headers) and `web/tools/run_page.js`
+  (headless Chromium with a software WebGPU adapter).
+
 ## 3. Dependency strategy
 
 Build every library from source with Emscripten into `build_web/deps` through a
