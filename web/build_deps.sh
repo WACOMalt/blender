@@ -248,6 +248,16 @@ build_python() {
         ZLIB_CFLAGS="-I$PREFIX/include" ZLIB_LIBS="-L$PREFIX/lib -lz"
     emmake make -j "$JOBS"
     emmake make install
+    # Some modules link helper libraries that are not part of libpython, add them so
+    # embedding Python only needs libpython. CPython prefixes the bundled expat symbols.
+    local objs
+    objs="$(mktemp -d)"
+    for lib in Modules/_decimal/libmpdec/libmpdec.a Modules/expat/libexpat.a Modules/_hacl/libHacl_Hash_SHA2.a; do
+      (cd "$objs" && emar x "$host/$lib")
+    done
+    # Append (q), never replace (r): libmpdec has a `context.o` like CPython itself.
+    emar qs "$PREFIX/lib/libpython3.13.a" "$objs"/*.o
+    rm -rf "$objs"
   )
 }
 
