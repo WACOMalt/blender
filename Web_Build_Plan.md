@@ -4,9 +4,13 @@ Goal: keep an up-to-date build of Blender that runs in a desktop web browser
 (Chrome and Firefox first), with as many features as are practical.
 Hosting/deployment (blender.bsums.xyz) is handled by the repo owner and is out of scope.
 
-Status: **Phase 1 (plan) written. Phases 2–3 not yet done.** Nothing in this
-repo has been built for WASM yet; the toolchain scripts in `web/` are untested
-scaffolding until a cloud session with network access to the Emscripten SDK runs them.
+Status: **Phase 2 done, Phase 3 in progress.** The Emscripten toolchain, all
+dependencies (including CPython 3.13) and the CMake platform support work, see
+`web/README.md`. Headless Blender is being brought up (fixes for 32 bit WebAssembly).
+
+Decisions by the repo owner (2026-10-28):
+- GPU: **WebGPU is the primary backend, with a reduced WebGL2 fallback** for browsers without WebGPU.
+- No intermediate demo page: go **straight to the full Blender UI** after the headless bring-up.
 
 ## 1. Constraints and realities
 
@@ -29,8 +33,8 @@ scaffolding until a cloud session with network access to the Emscripten SDK runs
 | Compiler | Emscripten (pin version in `web/setup_emsdk.sh`), CMake via `emcmake` |
 | Config | New `build_files/cmake/config/blender_web.cmake` (headless-style, features OFF by default, enabled incrementally) |
 | Threads | pthreads → Web Workers (`-pthread`, `-sPTHREAD_POOL_SIZE`), TBB or Blender's own task scheduler with a fixed pool |
-| Graphics, step 1 | New or adapted GPU backend on **WebGL2** via Emscripten's GLES3 (`-sMAX_WEBGL_VERSION=2`); EEVEE-Next needs compute so Workbench first |
-| Graphics, step 2 | **WebGPU** backend (Chrome/Firefox) via Emscripten `emdawnwebgpu`, modeled on the Metal/Vulkan backends in `source/blender/gpu/`; unlocks compute and EEVEE |
+| Graphics (primary) | **WebGPU** backend via Emscripten `emdawnwebgpu`, modeled on the Vulkan backend in `source/blender/gpu/`; compute and storage buffers make EEVEE and the full viewport possible. Browsers only accept WGSL, so shaders need a GLSL → SPIR-V → WGSL path at runtime |
+| Graphics (fallback) | Reduced **WebGL2** backend (GLES 3.0, `-sMAX_WEBGL_VERSION=2`) for browsers without WebGPU; no compute or storage buffers, so features are limited |
 | Windowing/input | GHOST backend on top of Emscripten HTML5 API (canvas, pointer lock, keyboard, clipboard, IME, DPI) |
 | Python | Build CPython for wasm32-emscripten (or use Pyodide's patches); required for the UI, which is Python-defined (`scripts/startup`) |
 | Filesystem | Emscripten MEMFS for runtime; **IDBFS** (IndexedDB) for persistent prefs/autosave; **File System Access API** in Chrome for direct open/save of `.blend`; download/upload fallback in Firefox |
