@@ -38,9 +38,18 @@ node web/run_node.js ../build_web/bin/blender.js -b scene.blend -E CYCLES -f 1
 Crashes print `wasm-function[N]` frames, `blender.js.symbols` (next to `blender.js`) maps
 `N` to function names.
 
-What works: loading and saving `.blend` files, Python and `bpy`, Cycles on the CPU (all
-threads), image formats of OpenImageIO. The UI draws with WebGPU
-(`source/blender/gpu/webgpu/`), which is still being brought up.
+Test scripts in `web/tests/` are copied into the bundle, the page runs one with
+`?fetch=tests/NAME.py&args=--python,/tests/NAME.py`. `run_page.js` takes a list of actions
+(`click:X,Y;key:Tab;wait:MS;shot:FILE;drop:URL@X,Y`) to drive the UI before the screenshot.
+
+What works: the full UI with WebGPU (`source/blender/gpu/webgpu/`), Workbench and the
+overlays, Edit mode, loading and saving `.blend` files (kept in IndexedDB, or by drag and
+drop and the Files panel), Python and `bpy`, Cycles on the CPU (all threads, also in the
+viewport), image formats of OpenImageIO. EEVEE is not available yet (its shaders can not be
+translated to WGSL), Material Preview falls back to Workbench.
+
+Headless Chromium draws with SwiftShader, which drops lines crossing the camera plane
+(`web/tests/lineclip.html`); screenshots miss the near part of the grid because of it.
 
 ## How the build works
 

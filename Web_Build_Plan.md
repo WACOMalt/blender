@@ -95,8 +95,16 @@ Decisions by the repo owner (2026-10-28):
 - Y is flipped in the vertex shader so textures have the same memory layout as on other
   backends; the window framebuffer is copied to the canvas with a flip when presenting.
 - Clears before the first draw of a pass are load operations, other clears are draws.
-- Not supported yet: geometry shaders, layered rendering, barycentric coordinates, buffer
-  textures, 1D array textures, image atomics, wide points, triangle fans in batches.
+- Points larger than one pixel (WebGPU has none) are drawn by a variant of the shader that
+  expands each point to two triangles, reading the vertex attributes from storage buffers.
+- EEVEE's shaders can not be translated by Tint yet (read-write storage textures, dual source
+  blending, image atomics, non-uniform barriers), so Material Preview and Rendered shading use
+  Workbench and F12 renders with EEVEE report an error on WebGPU. Cycles works.
+- Not supported yet: geometry shaders, layered rendering, barycentric coordinates,
+  1D array textures, image atomics, wide points in indirect draws, triangle fans in batches.
+- Testing caveat: headless Chromium renders with SwiftShader, which drops lines that cross the
+  camera plane (one end behind the camera; `web/tests/lineclip.html` reproduces it without
+  Blender). The near part of the viewport grid is missing in those screenshots, not on a GPU.
 
 ## 3. Dependency strategy
 

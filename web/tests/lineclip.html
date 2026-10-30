@@ -1,0 +1,32 @@
+<!doctype html>
+<html><body><canvas id="c" width="64" height="64"></canvas>
+<script>
+// Plain WebGPU test: does a line with one endpoint behind the camera (w < 0) rasterize?
+const TOPO = location.hash === '#tri' ? 'triangle-list' : 'line-list';
+(async () => {
+  const adapter = await navigator.gpu.requestAdapter();
+  const device = await adapter.requestDevice();
+  const info = adapter.info; console.log('ADAPTER ' + info.vendor + ' / ' + info.architecture + ' / ' + info.description);
+  const format = 'rgba8unorm';
+  const tex = device.createTexture({size: [64, 64], format, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC});
+  const code = `const LINE: bool = ${TOPO == 'line-list'};
+    struct VSOut { @builtin(position) pos: vec4f };
+    @vertex fn vs(@builtin(vertex_index) i: u32) -> VSOut {
+      var p = array<vec4f, 3>(vec4f(-1.0, -0.5, 1.9, 2.0), vec4f(1.0, -0.5, 1.9, 2.0), vec4f(0.0, 2.5, -5.1, -5.0));
+      var o: VSOut; o.pos = p[select(i, 2u, i == 1u && LINE)]; return o;
+    }
+    @fragment fn fs() -> @location(0) vec4f { return vec4f(1.0); }`;
+  const module = device.createShaderModule({code});
+  const pipeline = device.createRenderPipeline({layout: 'auto', vertex: {module, entryPoint: 'vs'}, fragment: {module, entryPoint: 'fs', targets: [{format}]}, primitive: {topology: TOPO}});
+  const enc = device.createCommandEncoder();
+  const pass = enc.beginRenderPass({colorAttachments: [{view: tex.createView(), loadOp: 'clear', clearValue: [0, 0, 0, 1], storeOp: 'store'}]});
+  pass.setPipeline(pipeline); pass.draw(TOPO == 'line-list' ? 2 : 3); pass.end();
+  const buf = device.createBuffer({size: 64 * 64 * 4, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ});
+  enc.copyTextureToBuffer({texture: tex}, {buffer: buf, bytesPerRow: 256}, [64, 64]);
+  device.queue.submit([enc.finish()]);
+  await buf.mapAsync(GPUMapMode.READ);
+  const data = new Uint8Array(buf.getMappedRange());
+  let lit = 0; for (let i = 0; i < data.length; i += 4) if (data[i] > 128) lit++;
+  console.log('LINECLIP ' + TOPO + ' lit pixels: ' + lit);
+})();
+</script></body></html>

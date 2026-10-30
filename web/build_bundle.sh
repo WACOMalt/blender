@@ -18,4 +18,7 @@ mkdir -p "$OUT"
 cp "$ROOT/web/shell/index.html" "$ROOT/web/shell/blender_loader.js" "$OUT/"
 cp "$BUILD/bin/blender.js" "$BUILD/bin/blender.wasm" "$OUT/"
 python3 "$ROOT/web/package_data.py" "$VERSION_DIR" "$OUT"
+# Test scripts, loaded by the page with `?fetch=tests/NAME&args=--python,/tests/NAME`.
+mkdir -p "$OUT/tests"
+cp "$ROOT"/web/tests/* "$OUT/tests/"
 echo "Bundle written to $OUT"
