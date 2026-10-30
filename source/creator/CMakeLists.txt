@@ -71,6 +71,10 @@ if(WITH_VULKAN_BACKEND)
   add_definitions(-DWITH_VULKAN_BACKEND)
 endif()
 
+if(WITH_WEBGPU_BACKEND)
+  add_definitions(-DWITH_WEBGPU_BACKEND)
+endif()
+
 if(WITH_RENDERDOC)
   add_definitions(-DWITH_RENDERDOC)
 endif()
@@ -2072,6 +2076,9 @@ unset(LIB)
 setup_platform_linker_flags(blender)
 setup_platform_linker_libs(blender)
 setup_platform_linker_symbol_hiding(blender)
+if(EMSCRIPTEN)
+  blender_web_setup_blender_target(blender)
+endif()
 
 blender_target_include_dirs(blender ${INC})
 

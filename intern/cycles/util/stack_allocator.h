@@ -41,7 +41,14 @@ template<int SIZE, typename T> class ccl_try_align(16) StackAllocator {
     if (n == 0) {
       return nullptr;
     }
-    if (pointer_ + n >= SIZE || use_stack_ == false) {
+#ifdef __EMSCRIPTEN__
+    /* The libc++ of Emscripten allocates through temporary copies of the allocator, the memory
+     * would be on the stack of the temporary and freed as heap memory later. */
+    const bool use_stack = false;
+#else
+    const bool use_stack = use_stack_;
+#endif
+    if (pointer_ + n >= SIZE || use_stack == false) {
       size_t size = n * sizeof(T);
       util_guarded_mem_alloc(size);
       T *mem;

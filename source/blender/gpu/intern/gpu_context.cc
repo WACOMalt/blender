@@ -45,6 +45,9 @@
 #ifdef WITH_METAL_BACKEND
 #  include "mtl_backend.hh"
 #endif
+#ifdef WITH_WEBGPU_BACKEND
+#  include "wg_backend.hh"
+#endif
 #include "dummy_backend.hh"
 
 #include "draw_debug.hh"
@@ -460,6 +463,8 @@ static const char *gpu_backend_type_name(const GPUBackendType backend_type)
       return "Vulkan";
     case GPU_BACKEND_METAL:
       return "Metal";
+    case GPU_BACKEND_WEBGPU:
+      return "WebGPU";
     case GPU_BACKEND_NONE:
       return "None";
     case GPU_BACKEND_ANY:
@@ -497,6 +502,10 @@ bool GPU_backend_type_selection_detect()
 
 #if defined(WITH_VULKAN_BACKEND)
   backends_to_check.add(GPU_BACKEND_VULKAN);
+#endif
+
+#if defined(WITH_WEBGPU_BACKEND)
+  backends_to_check.add(GPU_BACKEND_WEBGPU);
 #endif
 
   for (const GPUBackendType backend_type : backends_to_check) {
@@ -545,6 +554,12 @@ static bool gpu_backend_supported()
 #else
       return false;
 #endif
+    case GPU_BACKEND_WEBGPU:
+#ifdef WITH_WEBGPU_BACKEND
+      return WGBackend::is_supported();
+#else
+      return false;
+#endif
     case GPU_BACKEND_NONE:
       return true;
     default:
@@ -580,6 +595,11 @@ static void gpu_backend_create()
 #ifdef WITH_METAL_BACKEND
     case GPU_BACKEND_METAL:
       g_backend = MEM_new<MTLBackend>(__func__);
+      break;
+#endif
+#ifdef WITH_WEBGPU_BACKEND
+    case GPU_BACKEND_WEBGPU:
+      g_backend = MEM_new<WGBackend>(__func__);
       break;
 #endif
     case GPU_BACKEND_NONE:
@@ -631,6 +651,12 @@ GPUBackendType GPU_backend_get_type()
   }
 #endif
 
+#ifdef WITH_WEBGPU_BACKEND
+  if (g_backend && dynamic_cast<WGBackend *>(g_backend) != nullptr) {
+    return GPU_BACKEND_WEBGPU;
+  }
+#endif
+
   return GPU_BACKEND_NONE;
 }
 
@@ -666,6 +692,10 @@ static GHOST_TDrawingContextType ghost_context_type()
 #ifdef WITH_METAL_BACKEND
     case GPU_BACKEND_METAL:
       return GHOST_kDrawingContextTypeMetal;
+#endif
+#ifdef WITH_WEBGPU_BACKEND
+    case GPU_BACKEND_WEBGPU:
+      return GHOST_kDrawingContextTypeWebGPU;
 #endif
     default:
       BLI_assert_unreachable();

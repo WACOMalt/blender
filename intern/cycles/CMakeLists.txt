@@ -67,6 +67,12 @@ if(WITH_CYCLES_NATIVE_ONLY)
     endif()
     string(APPEND CMAKE_CXX_FLAGS " ${MSVC_NATIVE_ARCH_FLAGS}")
   endif()
+elseif(EMSCRIPTEN)
+  # Emscripten accepts SSE flags (emulated with WebAssembly SIMD), but the x86 kernel
+  # variants aren't supported for WebAssembly yet, use the generic kernel.
+  set(CXX_HAS_SSE42 FALSE)
+  set(CXX_HAS_AVX2 FALSE)
+  set(CXX_HAS_F16C FALSE)
 elseif(SUPPORTS_NEON_BUILD AND SSE2NEON_FOUND)
   # On ARM we use SSE2NEON to compile the cycles SSE kernels into native NEON instructions
   # Disable the CXX_HAS_* flags so we don't add any SSE or AVX compiler flags.

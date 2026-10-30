@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blender</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1d1d1d; }
+  /* The canvas fills the page from the top left corner, GHOST relies on this for coordinates. */
+  #canvas { position: fixed; left: 0; top: 0; width: 100vw; height: 100vh; display: block; outline: none; }
+  #overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
+             justify-content: center; gap: 12px; color: #d8d8d8; font: 14px system-ui, sans-serif;
+             background: #1d1d1d; }
+  #overlay.hidden { display: none; }
+  #progress { width: min(360px, 80vw); height: 4px; background: #303030; border-radius: 2px; overflow: hidden; }
+  #progress-bar { width: 0; height: 100%; background: #4772b3; transition: width 0.1s; }
+  #status { max-width: 80vw; text-align: center; white-space: pre-wrap; }
+  .hidden { display: none !important; }
+  /* In Blender's status bar, left of the version number. */
+  #files-button { position: fixed; right: 80px; bottom: 2px; height: 18px; padding: 0 8px; border: 1px solid #555;
+                  border-radius: 4px; background: #303030; color: #d8d8d8; font: 11px system-ui, sans-serif;
+                  cursor: pointer; }
+  #files-panel { position: fixed; right: 8px; bottom: 26px; width: min(420px, 90vw); max-height: 60vh;
+                 overflow: auto; padding: 10px; border: 1px solid #555; border-radius: 6px;
+                 background: #262626f2; color: #d8d8d8; font: 13px system-ui, sans-serif; }
+  #files-panel header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  #files-panel a { color: #8fb4ff; }
+  .files-row { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; }
+  .files-actions { margin-top: 10px; display: flex; justify-content: space-between; align-items: center; }
+</style>
+</head>
+<body>
+<canvas id="canvas" tabindex="0"></canvas>
+<div id="overlay">
+  <div id="status">Loading Blender…</div>
+  <div id="progress"><div id="progress-bar"></div></div>
+</div>
+<button id="files-button" class="hidden" title="Download and upload files">Files</button>
+<div id="files-panel" class="hidden">
+  <header><strong>Files</strong><button id="files-close">Close</button></header>
+  <div id="files-list"></div>
+  <div class="files-actions">
+    <label>Upload <input id="files-upload" type="file" multiple></label>
+  </div>
+  <p>Files are kept in this browser. Drop files on Blender to open them.</p>
+</div>
+<script src="blender.js"></script>
+<script src="blender_loader.js"></script>
+</body>
+</html>

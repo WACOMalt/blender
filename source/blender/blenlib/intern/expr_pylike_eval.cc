@@ -48,6 +48,22 @@ namespace blender {
 #  pragma fenv_access(on)
 #endif
 
+/* WebAssembly has no floating point exception flags, detect errors from the result instead. */
+#if defined(FE_DIVBYZERO) && defined(FE_INVALID)
+#  define USE_FENV_EXCEPTIONS
+#endif
+
+/** True when evaluating `result` didn't raise a division by zero or invalid operation. */
+static bool fp_result_is_valid(const double result)
+{
+#ifdef USE_FENV_EXCEPTIONS
+  UNUSED_VARS(result);
+  return fetestexcept(FE_DIVBYZERO | FE_INVALID) == 0;
+#else
+  return std::isfinite(result);
+#endif
+}
+
 /* -------------------------------------------------------------------- */
 /** \name Internal Types
  * \{ */
@@ -261,10 +277,16 @@ eExprPyLike_EvalStatus BLI_expr_pylike_eval(ExprPyLike_Parsed *expr,
   *r_result = stack[0];
 
   /* Detect floating point evaluation errors. */
+#ifdef USE_FENV_EXCEPTIONS
   int flags = fetestexcept(FE_DIVBYZERO | FE_INVALID);
   if (flags) {
     return (flags & FE_INVALID) ? EXPR_PYLIKE_MATH_ERROR : EXPR_PYLIKE_DIV_BY_ZERO;
   }
+#else
+  if (!std::isfinite(*r_result)) {
+    return std::isnan(*r_result) ? EXPR_PYLIKE_MATH_ERROR : EXPR_PYLIKE_DIV_BY_ZERO;
+  }
+#endif
 
   return EXPR_PYLIKE_SUCCESS;
 }
@@ -553,7 +575,7 @@ static bool parse_add_func(ExprParseState *state,
        * see D6012 for details. */
       volatile double result = func(prev_ops[-1].arg.dval);
 
-      if (fetestexcept(FE_DIVBYZERO | FE_INVALID) == 0) {
+      if (fp_result_is_valid(result)) {
         prev_ops[-1].arg.dval = result;
         return true;
       }
@@ -570,7 +592,7 @@ static bool parse_add_func(ExprParseState *state,
        * see D6012 for details. */
       volatile double result = func(prev_ops[-2].arg.dval, prev_ops[-1].arg.dval);
 
-      if (fetestexcept(FE_DIVBYZERO | FE_INVALID) == 0) {
+      if (fp_result_is_valid(result)) {
         prev_ops[-2].arg.dval = result;
         state->ops.resize(state->ops.size() - 1);
         state->stack_ptr--;
@@ -591,7 +613,7 @@ static bool parse_add_func(ExprParseState *state,
       volatile double result = func(
           prev_ops[-3].arg.dval, prev_ops[-2].arg.dval, prev_ops[-1].arg.dval);
 
-      if (fetestexcept(FE_DIVBYZERO | FE_INVALID) == 0) {
+      if (fp_result_is_valid(result)) {
         prev_ops[-3].arg.dval = result;
         state->ops.resize(state->ops.size() - 2);
         state->stack_ptr -= 2;

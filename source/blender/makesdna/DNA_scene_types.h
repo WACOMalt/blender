@@ -2967,10 +2967,6 @@ struct Scene {
   /** Grease Pencil - Annotations. */
   struct bGPdata *gpd = nullptr;
 
-  /* Movie Tracking. */
-  /** Active movie clip. */
-  struct MovieClip *clip = nullptr;
-
   /** Physics simulation settings. */
   struct PhysicsSettings physics_settings;
 
@@ -2981,6 +2977,14 @@ struct Scene {
   struct CustomData_MeshMasks customdata_mask;
   /** XXX: same as `customdata_mask` but for temp operator use (viewport renders). */
   struct CustomData_MeshMasks customdata_mask_modal;
+
+  /* Movie Tracking. */
+  /**
+   * Active movie clip.
+   * \note Placed after `customdata_mask` so it is 8 byte aligned on 32 bit platforms too
+   * (WebAssembly aligns 64 bit integers to 8 bytes).
+   */
+  struct MovieClip *clip = nullptr;
 
   /* Color Management. */
   ColorManagedViewSettings view_settings;

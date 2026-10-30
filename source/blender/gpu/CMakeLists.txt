@@ -528,6 +528,55 @@ if(WITH_VULKAN_BACKEND)
   add_definitions(-DWITH_VULKAN_BACKEND)
 endif()
 
+if(WITH_WEBGPU_BACKEND)
+  list(APPEND SRC
+    webgpu/wg_backend.cc
+    webgpu/wg_batch.cc
+    webgpu/wg_buffer.cc
+    webgpu/wg_common.cc
+    webgpu/wg_context.cc
+    webgpu/wg_device.cc
+    webgpu/wg_framebuffer.cc
+    webgpu/wg_immediate.cc
+    webgpu/wg_shader.cc
+    webgpu/wg_shader_interface.cc
+    webgpu/wg_state.cc
+    webgpu/wg_texture.cc
+
+    webgpu/wg_backend.hh
+    webgpu/wg_batch.hh
+    webgpu/wg_buffer.hh
+    webgpu/wg_commands.hh
+    webgpu/wg_common.hh
+    webgpu/wg_context.hh
+    webgpu/wg_device.hh
+    webgpu/wg_framebuffer.hh
+    webgpu/wg_immediate.hh
+    webgpu/wg_misc.hh
+    webgpu/wg_shader.hh
+    webgpu/wg_shader_interface.hh
+    webgpu/wg_state.hh
+    webgpu/wg_texture.hh
+  )
+  if(NOT WITH_VULKAN_BACKEND)
+    # Data conversion and memory layouts are shared with the Vulkan back-end.
+    list(APPEND SRC
+      vulkan/vk_data_conversion.cc
+      vulkan/vk_memory_layout.cc
+
+      vulkan/vk_data_conversion.hh
+      vulkan/vk_memory_layout.hh
+    )
+  endif()
+  list(APPEND INC
+    webgpu
+  )
+  list(APPEND LIB
+    PRIVATE bf::dependencies::optional::webgpu
+  )
+  add_definitions(-DWITH_WEBGPU_BACKEND)
+endif()
+
 set(GLSL_SRC
   GPU_shader_shared.hh
 

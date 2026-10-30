@@ -366,6 +366,15 @@ static int compute_type_size_and_alignment(TypeTable &table,
 
             /* struct alignment */
             if (member_type.is_struct) {
+              /* Unlike x86, WebAssembly aligns 8 byte types to 8 bytes in 32 bit structs too. */
+              if (sizeof(void *) == 4 && member_type.align_32 >= 8 && (size_native % 8)) {
+                fprintf(stderr,
+                        "Align struct error (32 bit): %s::%s (starts at %d, add padding pointer)\n",
+                        struct_info.name.c_str(),
+                        cp,
+                        size_native);
+                dna_error = true;
+              }
               if (sizeof(void *) == 8 && (size_native % 8)) {
                 fprintf(stderr,
                         "Align struct error: %s::%s (starts at %d on the native platform; "

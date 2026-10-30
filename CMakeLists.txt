@@ -983,6 +983,14 @@ else()
   mark_as_advanced(WITH_VULKAN_BACKEND)
 endif()
 
+# WebGPU
+if(EMSCRIPTEN)
+  option(WITH_WEBGPU_BACKEND "Enable WebGPU as graphics backend (web browsers)" ON)
+  mark_as_advanced(WITH_WEBGPU_BACKEND)
+else()
+  set(WITH_WEBGPU_BACKEND OFF)
+endif()
+
 # Metal
 if(APPLE)
   option(WITH_METAL_BACKEND "\
@@ -1592,6 +1600,9 @@ endif()
 
 if(UNIX AND NOT APPLE)
   include(build_files/cmake/platform/platform_unix.cmake)
+  if(EMSCRIPTEN)
+    include(build_files/cmake/platform/platform_emscripten.cmake)
+  endif()
 elseif(WIN32)
   include(build_files/cmake/platform/platform_win32.cmake)
 elseif(APPLE)
@@ -2513,6 +2524,11 @@ add_subdirectory(tests)
 
 if(WITH_BLENDER)
   add_subdirectory(source/creator)
+endif()
+
+if(EMSCRIPTEN)
+  # Build tools are compiled to WebAssembly and run with Node.js.
+  blender_web_setup_host_tools()
 endif()
 
 

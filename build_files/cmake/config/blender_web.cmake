@@ -1,0 +1,80 @@
+# SPDX-FileCopyrightText: 2026 Blender Authors
+#
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+# WebAssembly (Emscripten) configuration, for running Blender in a web browser.
+# Features are OFF unless they have been ported, see `Web_Build_Plan.md`.
+#
+# Example usage:
+#   source web/setup_emsdk.sh && web/build_deps.sh
+#   emcmake cmake -C build_files/cmake/config/blender_web.cmake \
+#     -DCMAKE_PREFIX_PATH=$HOME/blender-web-deps/install -S . -B ../build_web -G Ninja
+#
+# Or use `web/build_blender.sh` which does the above.
+
+# Start from the minimal feature set.
+include("${CMAKE_CURRENT_LIST_DIR}/blender_lite.cmake")
+
+# Windowing uses GHOST's Emscripten backend (a page canvas), background mode works too.
+set(WITH_HEADLESS              OFF CACHE BOOL "" FORCE)
+set(WITH_LIBS_PRECOMPILED      OFF CACHE BOOL "" FORCE)
+set(WITH_INSTALL_PORTABLE      ON  CACHE BOOL "" FORCE)
+set(WITH_STATIC_LIBS           ON  CACHE BOOL "" FORCE)
+set(WITH_STRICT_BUILD_OPTIONS  ON  CACHE BOOL "" FORCE)
+
+# The browser's WebGPU is the GPU backend.
+set(WITH_OPENGL_BACKEND        OFF CACHE BOOL "" FORCE)
+set(WITH_VULKAN_BACKEND        OFF CACHE BOOL "" FORCE)
+set(WITH_WEBGPU_BACKEND        ON  CACHE BOOL "" FORCE)
+
+# x86/ARM specific.
+set(WITH_COMPILER_SIMD         OFF CACHE BOOL "" FORCE)
+set(WITH_CPU_CHECK             OFF CACHE BOOL "" FORCE)
+
+# Not available or not useful in a browser.
+set(WITH_GHOST_X11             OFF CACHE BOOL "" FORCE)
+set(WITH_GHOST_WAYLAND         OFF CACHE BOOL "" FORCE)
+set(WITH_GHOST_SDL             OFF CACHE BOOL "" FORCE)
+set(WITH_GHOST_XDND            OFF CACHE BOOL "" FORCE)
+set(WITH_X11_XINPUT            OFF CACHE BOOL "" FORCE)
+set(WITH_X11_XFIXES            OFF CACHE BOOL "" FORCE)
+set(WITH_INPUT_NDOF            OFF CACHE BOOL "" FORCE)
+set(WITH_GTESTS                OFF CACHE BOOL "" FORCE)
+set(WITH_GPU_DRAW_TESTS        OFF CACHE BOOL "" FORCE)
+set(WITH_RENDERDOC             OFF CACHE BOOL "" FORCE)
+set(WITH_COMPILER_ASAN         OFF CACHE BOOL "" FORCE)
+set(WITH_LINKER_MOLD           OFF CACHE BOOL "" FORCE)
+set(WITH_LINKER_LLD            OFF CACHE BOOL "" FORCE)
+set(WITH_BLENDER_THUMBNAILER   OFF CACHE BOOL "" FORCE)
+set(WITH_INTERNATIONAL         OFF CACHE BOOL "" FORCE)
+set(WITH_BUILDINFO             OFF CACHE BOOL "" FORCE)
+set(WITH_GPU_SHADER_CPP_COMPILATION OFF CACHE BOOL "" FORCE)
+
+# Optional libraries built by `web/build_deps.sh`.
+set(WITH_TBB                   ON  CACHE BOOL "" FORCE)
+
+# Python is built by `web/build_deps.sh` (pass `-DPYTHON_ROOT_DIR`, see `web/build_blender.sh`).
+# Python packages with native code are not built for WebAssembly yet.
+set(WITH_PYTHON                ON  CACHE BOOL "" FORCE)
+set(WITH_PYTHON_INSTALL        ON  CACHE BOOL "" FORCE)
+set(WITH_PYTHON_NUMPY          OFF CACHE BOOL "" FORCE)
+set(WITH_PYTHON_INSTALL_NUMPY  OFF CACHE BOOL "" FORCE)
+set(WITH_PYTHON_INSTALL_REQUESTS OFF CACHE BOOL "" FORCE)
+set(WITH_PYTHON_INSTALL_ZSTANDARD OFF CACHE BOOL "" FORCE)
+
+# Cycles renders on the CPU (multi-threaded). Libraries without a WebAssembly port are off,
+# Cycles then uses its own BVH (instead of Embree) and no OSL, path guiding or OIDN denoising.
+set(WITH_CYCLES                ON  CACHE BOOL "" FORCE)
+set(WITH_EMBREE                OFF CACHE BOOL "" FORCE)
+set(WITH_CYCLES_OSL            OFF CACHE BOOL "" FORCE)
+set(WITH_CYCLES_PATH_GUIDING   OFF CACHE BOOL "" FORCE)
+set(WITH_OPENIMAGEDENOISE      OFF CACHE BOOL "" FORCE)
+set(WITH_CYCLES_DEVICE_CUDA    OFF CACHE BOOL "" FORCE)
+set(WITH_CYCLES_DEVICE_OPTIX   OFF CACHE BOOL "" FORCE)
+set(WITH_CYCLES_DEVICE_HIP     OFF CACHE BOOL "" FORCE)
+set(WITH_CYCLES_DEVICE_HIPRT   OFF CACHE BOOL "" FORCE)
+set(WITH_CYCLES_DEVICE_ONEAPI  OFF CACHE BOOL "" FORCE)
+set(WITH_CYCLES_DEVICE_METAL   OFF CACHE BOOL "" FORCE)
+set(WITH_CYCLES_CUDA_BINARIES  OFF CACHE BOOL "" FORCE)
+set(WITH_CYCLES_HIP_BINARIES   OFF CACHE BOOL "" FORCE)
+set(WITH_CUDA_DYNLOAD          OFF CACHE BOOL "" FORCE)

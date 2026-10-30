@@ -53,11 +53,12 @@ struct Scope {
 
   bool is_valid() const
   {
-    return index_ < parser_->scope_types.size();
+    /* Compare as unsigned so a negative index is invalid, also where `size_t` is 32 bit. */
+    return uint64_t(index_) < uint64_t(parser_->scope_types.size());
   }
   bool is_invalid() const
   {
-    return index_ >= parser_->scope_types.size();
+    return !is_valid();
   }
 
   Token operator[](int i)

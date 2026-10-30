@@ -215,8 +215,8 @@ struct GPUSource {
       std::function<void(GPUSource &, GPUFunctionDictionary *, GPUPrintFormatMap *)> metadata_fn)
       : fullpath(path), filename(file), source(datatoc)
   {
-    BLI_assert_msg(source.find("//") == std::string::npos &&
-                       source.find("/*") == std::string::npos,
+    BLI_assert_msg(source.find("//") == StringRef::not_found &&
+                       source.find("/*") == StringRef::not_found,
                    "Input source should have no comments.");
     metadata_fn(*this, g_functions, g_formats);
   };

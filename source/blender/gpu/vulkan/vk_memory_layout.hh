@@ -13,7 +13,9 @@
 #include "BLI_math_base_c.hh"
 #include "BLI_math_vector_types.hh"
 
-#include "vk_common.hh"
+#ifdef WITH_VULKAN_BACKEND
+#  include "vk_common.hh"
+#endif
 
 namespace blender::gpu {
 

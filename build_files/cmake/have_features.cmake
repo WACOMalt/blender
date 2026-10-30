@@ -11,7 +11,10 @@ include(CheckSymbolExists)
 # Used for: `intern/guardedalloc/intern/mallocn_intern.hh`.
 # Function `malloc_stats` is only available on GLIBC,
 # so check that before defining `HAVE_MALLOC_STATS`.
-check_symbol_exists(malloc_stats "malloc.h" HAVE_MALLOC_STATS_H)
+if(NOT EMSCRIPTEN)
+  # Emscripten declares `malloc_stats` in `malloc.h` but doesn't implement it.
+  check_symbol_exists(malloc_stats "malloc.h" HAVE_MALLOC_STATS_H)
+endif()
 
 # Used for: `source/creator/creator_signals.c`.
 # The function `feenableexcept` is not present non-GLIBC systems,

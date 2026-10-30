@@ -164,6 +164,10 @@ if(WITH_VULKAN_BACKEND)
   add_definitions(-DWITH_VULKAN_BACKEND)
 endif()
 
+if(WITH_WEBGPU_BACKEND)
+  add_definitions(-DWITH_WEBGPU_BACKEND)
+endif()
+
 if(WITH_PYTHON)
   list(APPEND INC
     ../python

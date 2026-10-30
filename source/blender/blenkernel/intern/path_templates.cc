@@ -579,7 +579,7 @@ static int format_float_to_string(const FormatSpecifier &format,
 
       /* If the string consists only of digits and a possible negative sign, then
        * we append a ".0" to match Python. */
-      if (StringRef(r_output_string).find_first_not_of("-0123456789") == std::string::npos) {
+      if (StringRef(r_output_string).find_first_not_of("-0123456789") == StringRef::not_found) {
         r_output_string[output_length] = '.';
         r_output_string[output_length + 1] = '0';
         r_output_string[output_length + 2] = '\0';

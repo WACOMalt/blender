@@ -14,6 +14,9 @@
 
 #include "GHOST_ISystem.hh"
 #include "GHOST_SystemHeadless.hh"
+#if defined(WITH_GHOST_EMSCRIPTEN)
+#  include "GHOST_SystemEmscripten.hh"
+#endif
 
 #if defined(WITH_GHOST_X11) && defined(WITH_GHOST_WAYLAND)
 #  include "GHOST_SystemWayland.hh"
@@ -66,6 +69,13 @@ GHOST_TSuccess GHOST_ISystem::createSystem(bool verbose, [[maybe_unused]] bool b
 
 #if defined(WITH_HEADLESS)
     /* Pass. */
+#elif defined(WITH_GHOST_EMSCRIPTEN)
+    /* Background mode uses the headless system: there may be no page (e.g. with Node.js). */
+    if (!background) {
+      backends_attempted.push_back({"EMSCRIPTEN"});
+      CLOG_INFO(&LOG, "Create Emscripten system");
+      system_ = new GHOST_SystemEmscripten();
+    }
 #elif defined(WITH_GHOST_X11) && defined(WITH_GHOST_WAYLAND)
     /* Special case, try Wayland, fall back to X11. */
     if (has_wayland_libraries) {

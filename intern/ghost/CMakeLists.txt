@@ -100,6 +100,15 @@ if(WITH_VULKAN_BACKEND)
   add_definitions(-DWITH_VULKAN_BACKEND)
 endif()
 
+if(WITH_WEBGPU_BACKEND)
+  list(APPEND SRC
+    intern/GHOST_ContextWebGPU.cc
+
+    intern/GHOST_ContextWebGPU.hh
+  )
+  add_definitions(-DWITH_WEBGPU_BACKEND)
+endif()
+
 if(WITH_GHOST_DEBUG)
   list(APPEND SRC
     intern/GHOST_EventPrinter.cc
@@ -139,6 +148,15 @@ list(APPEND SRC
 
 if(WITH_HEADLESS)
   add_definitions(-DWITH_HEADLESS)
+elseif(EMSCRIPTEN)
+  list(APPEND SRC
+    intern/GHOST_SystemEmscripten.cc
+    intern/GHOST_WindowEmscripten.cc
+
+    intern/GHOST_SystemEmscripten.hh
+    intern/GHOST_WindowEmscripten.hh
+  )
+  add_definitions(-DWITH_GHOST_EMSCRIPTEN)
 elseif(WITH_GHOST_SDL)
   list(APPEND SRC
     intern/GHOST_SystemSDL.cc

@@ -139,7 +139,10 @@ find_package_wrapper(JPEG REQUIRED)
 find_package_wrapper(PNG REQUIRED)
 find_package_wrapper(ZLIB REQUIRED)
 find_package_wrapper(Zstd REQUIRED)
-find_package_wrapper(Epoxy REQUIRED)
+if(NOT EMSCRIPTEN)
+  # WebAssembly uses WebGL/WebGPU, the target is left empty.
+  find_package_wrapper(Epoxy REQUIRED)
+endif()
 find_package_wrapper(fmt REQUIRED)
 if(DEFINED fmt_DIR)
   # Hide the fmt_DIR from the standard user settings to be consistent with our
@@ -199,7 +202,7 @@ if(NOT WITH_SYSTEM_FREETYPE)
     mark_as_advanced(freetype_DIR)
   endif()
 
-  if(DEFINED LIBDIR)
+  if(DEFINED LIBDIR OR EMSCRIPTEN)
     find_package_wrapper(Brotli REQUIRED)
 
     # NOTE: This is done on WIN32 & APPLE but fails on some Linux systems.
@@ -632,6 +635,8 @@ add_bundled_libraries(hiprt/lib)
 # OpenSuse needs lutil, ArchLinux not, for now keep, can avoid by using --as-needed
 if(HAIKU)
   list(APPEND PLATFORM_LINKLIBS -lnetwork)
+elseif(EMSCRIPTEN)
+  list(APPEND PLATFORM_LINKLIBS -lc -lm)
 else()
   list(APPEND PLATFORM_LINKLIBS -lutil -lc -lm)
 endif()
