@@ -282,6 +282,10 @@ struct BSLParser {
       return false;
     }
 
+    /* Report errors even when parsing speculatively, as no other declaration accepts these
+     * keywords. Otherwise a syntax error silently stops parsing at the end of file sentinel. */
+    no_error = false;
+
     NODE(PipelineDecl);
     /* PipelineGraphic / PipelineCompute. */
     qualified_id();
@@ -340,7 +344,10 @@ struct BSLParser {
         match_if(Const, Constexpr);
 
         if (peek() == Static) {
-          error("Static keyword must be placed before constexpr");
+          /* Report even when parsing speculatively, as no other declaration accepts this. Then
+           * stop parsing like #error(). */
+          error_handler.report(curr, "Static keyword must be placed before constexpr");
+          curr = Token(parser);
           return true;
         }
       }

@@ -332,17 +332,17 @@ void BKE_fluid_cache_free(FluidDomainSettings *fds, Object *ob, int cache_map)
 
   if (cache_map & FLUID_DOMAIN_OUTDATED_DATA) {
     flags &= ~(FLUID_DOMAIN_BAKING_DATA | FLUID_DOMAIN_BAKED_DATA | FLUID_DOMAIN_OUTDATED_DATA);
-    BLI_path_join(temp_dir, sizeof(temp_dir), fds->cache_directory, FLUID_DOMAIN_DIR_CONFIG);
+    BLI_path_join(temp_dir, fds->cache_directory, FLUID_DOMAIN_DIR_CONFIG);
     BLI_path_abs(temp_dir, relbase);
     if (BLI_exists(temp_dir)) {
       BLI_delete(temp_dir, true, true);
     }
-    BLI_path_join(temp_dir, sizeof(temp_dir), fds->cache_directory, FLUID_DOMAIN_DIR_DATA);
+    BLI_path_join(temp_dir, fds->cache_directory, FLUID_DOMAIN_DIR_DATA);
     BLI_path_abs(temp_dir, relbase);
     if (BLI_exists(temp_dir)) {
       BLI_delete(temp_dir, true, true);
     }
-    BLI_path_join(temp_dir, sizeof(temp_dir), fds->cache_directory, FLUID_DOMAIN_DIR_SCRIPT);
+    BLI_path_join(temp_dir, fds->cache_directory, FLUID_DOMAIN_DIR_SCRIPT);
     BLI_path_abs(temp_dir, relbase);
     if (BLI_exists(temp_dir)) {
       BLI_delete(temp_dir, true, true);
@@ -351,7 +351,7 @@ void BKE_fluid_cache_free(FluidDomainSettings *fds, Object *ob, int cache_map)
   }
   if (cache_map & FLUID_DOMAIN_OUTDATED_NOISE) {
     flags &= ~(FLUID_DOMAIN_BAKING_NOISE | FLUID_DOMAIN_BAKED_NOISE | FLUID_DOMAIN_OUTDATED_NOISE);
-    BLI_path_join(temp_dir, sizeof(temp_dir), fds->cache_directory, FLUID_DOMAIN_DIR_NOISE);
+    BLI_path_join(temp_dir, fds->cache_directory, FLUID_DOMAIN_DIR_NOISE);
     BLI_path_abs(temp_dir, relbase);
     if (BLI_exists(temp_dir)) {
       BLI_delete(temp_dir, true, true);
@@ -360,7 +360,7 @@ void BKE_fluid_cache_free(FluidDomainSettings *fds, Object *ob, int cache_map)
   }
   if (cache_map & FLUID_DOMAIN_OUTDATED_MESH) {
     flags &= ~(FLUID_DOMAIN_BAKING_MESH | FLUID_DOMAIN_BAKED_MESH | FLUID_DOMAIN_OUTDATED_MESH);
-    BLI_path_join(temp_dir, sizeof(temp_dir), fds->cache_directory, FLUID_DOMAIN_DIR_MESH);
+    BLI_path_join(temp_dir, fds->cache_directory, FLUID_DOMAIN_DIR_MESH);
     BLI_path_abs(temp_dir, relbase);
     if (BLI_exists(temp_dir)) {
       BLI_delete(temp_dir, true, true);
@@ -370,7 +370,7 @@ void BKE_fluid_cache_free(FluidDomainSettings *fds, Object *ob, int cache_map)
   if (cache_map & FLUID_DOMAIN_OUTDATED_PARTICLES) {
     flags &= ~(FLUID_DOMAIN_BAKING_PARTICLES | FLUID_DOMAIN_BAKED_PARTICLES |
                FLUID_DOMAIN_OUTDATED_PARTICLES);
-    BLI_path_join(temp_dir, sizeof(temp_dir), fds->cache_directory, FLUID_DOMAIN_DIR_PARTICLES);
+    BLI_path_join(temp_dir, fds->cache_directory, FLUID_DOMAIN_DIR_PARTICLES);
     BLI_path_abs(temp_dir, relbase);
     if (BLI_exists(temp_dir)) {
       BLI_delete(temp_dir, true, true);
@@ -379,7 +379,7 @@ void BKE_fluid_cache_free(FluidDomainSettings *fds, Object *ob, int cache_map)
   }
   if (cache_map & FLUID_DOMAIN_OUTDATED_GUIDE) {
     flags &= ~(FLUID_DOMAIN_BAKING_GUIDE | FLUID_DOMAIN_BAKED_GUIDE | FLUID_DOMAIN_OUTDATED_GUIDE);
-    BLI_path_join(temp_dir, sizeof(temp_dir), fds->cache_directory, FLUID_DOMAIN_DIR_GUIDE);
+    BLI_path_join(temp_dir, fds->cache_directory, FLUID_DOMAIN_DIR_GUIDE);
     BLI_path_abs(temp_dir, relbase);
     if (BLI_exists(temp_dir)) {
       BLI_delete(temp_dir, true, true);
@@ -3224,8 +3224,7 @@ static Mesh *create_liquid_geometry(FluidDomainSettings *fds,
   float time_mult = fds->dx / (DT_DEFAULT * (25.0f / scene->frames_per_second()));
 
   if (use_speedvectors) {
-    velocities = attributes.lookup_or_add_for_write_only_span<float3>("velocity",
-                                                                      AttrDomain::Point);
+    velocities = attributes.ensure_for_write_only_span<float3>("velocity", AttrDomain::Point);
   }
 
   /* Loop for vertices and normals. */
@@ -3277,7 +3276,7 @@ static Mesh *create_liquid_geometry(FluidDomainSettings *fds,
     }
   }
 
-  bke::SpanAttributeWriter material_indices = attributes.lookup_or_add_for_write_span<int>(
+  bke::SpanAttributeWriter material_indices = attributes.ensure_for_write_span<int>(
       "material_index", AttrDomain::Face);
 
   /* Loop for triangles. */
@@ -4791,9 +4790,8 @@ void BKE_fluid_modifier_create_type_data(FluidModifierData *fmd)
     fmd->domain->fluid_mutex = BLI_rw_mutex_alloc();
 
     char cache_name[64];
-    BKE_fluid_cache_new_name_for_current_session(sizeof(cache_name), cache_name);
-    BKE_modifier_path_init(
-        fmd->domain->cache_directory, sizeof(fmd->domain->cache_directory), cache_name);
+    BKE_fluid_cache_new_name_for_current_session(cache_name);
+    BKE_modifier_path_init(fmd->domain->cache_directory, cache_name);
 
     /* pointcache options */
     fmd->domain->point_cache[0] = BKE_ptcache_add(&(fmd->domain->ptcaches[0]));
@@ -5062,10 +5060,10 @@ void BKE_fluid_modifier_copy(const FluidModifierData *fmd, FluidModifierData *tf
   }
 }
 
-void BKE_fluid_cache_new_name_for_current_session(int maxlen, char *r_name)
+void BKE_fluid_cache_new_name_for_current_session(MutableCStr r_name)
 {
   static int counter = 1;
-  BLI_snprintf(r_name, maxlen, FLUID_DOMAIN_DIR_DEFAULT "_%x", BLI_hash_int(counter));
+  SNPRINTF(r_name, FLUID_DOMAIN_DIR_DEFAULT "_%x", BLI_hash_int(counter));
   counter++;
 }
 

@@ -284,7 +284,7 @@ static void do_version_layers_to_collections(Main *bmain, Scene *scene)
           SNPRINTF_UTF8(name, DATA_("Collection %d"), layer + 1);
 
           Collection *collection = BKE_collection_add(bmain, collection_master, name);
-          collection->id.lib = scene->id.lib;
+          bke::id::id_lib_set(collection->id, scene->id.lib);
           if (ID_IS_LINKED(collection)) {
             collection->id.tag |= ID_TAG_INDIRECT;
           }
@@ -422,7 +422,7 @@ static void do_version_collection_propagate_lib_to_children(Collection *collecti
   if (ID_IS_LINKED(collection)) {
     for (CollectionChild &collection_child : collection->children) {
       if (!ID_IS_LINKED(collection_child.collection)) {
-        collection_child.collection->id.lib = collection->id.lib;
+        bke::id::id_lib_set(collection_child.collection->id, collection->id.lib);
       }
       do_version_collection_propagate_lib_to_children(collection_child.collection);
     }
@@ -1711,13 +1711,13 @@ static void update_mapping_node_fcurve_rna_path_callback(FCurve *fcurve,
   }
   else if (minimumNode && BLI_str_endswith(old_fcurve_rna_path, "max")) {
     char node_name_esc[sizeof(minimumNode->name) * 2];
-    BLI_str_escape(node_name_esc, minimumNode->name, sizeof(node_name_esc));
+    BLI_str_escape(node_name_esc, minimumNode->name);
     fcurve->rna_path_set_move(
         BLI_sprintfN("nodes[\"%s\"].%s", node_name_esc, "inputs[1].default_value"));
   }
   else if (maximumNode && BLI_str_endswith(old_fcurve_rna_path, "min")) {
     char node_name_esc[sizeof(maximumNode->name) * 2];
-    BLI_str_escape(node_name_esc, maximumNode->name, sizeof(node_name_esc));
+    BLI_str_escape(node_name_esc, maximumNode->name);
     fcurve->rna_path_set_move(
         BLI_sprintfN("nodes[\"%s\"].%s", node_name_esc, "inputs[1].default_value"));
   }
@@ -1835,7 +1835,7 @@ static void update_mapping_node_inputs_and_properties(bNodeTree *ntree)
       node.storage = nullptr;
 
       char node_name_esc[sizeof(node.name) * 2];
-      BLI_str_escape(node_name_esc, node.name, sizeof(node_name_esc));
+      BLI_str_escape(node_name_esc, node.name);
 
       char *nodePath = BLI_sprintfN("nodes[\"%s\"]", node_name_esc);
       animrig::versioning::fcurves_id_cb(&ntree->id, [&](ID * /*id*/, FCurve *fcu) {

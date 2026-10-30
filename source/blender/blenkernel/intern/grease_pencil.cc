@@ -929,17 +929,12 @@ void Drawing::set_texture_matrices(Span<float4x2> matrices, const IndexMask &sel
 {
   CurvesGeometry &curves = this->strokes_for_write();
   MutableAttributeAccessor attributes = curves.attributes_for_write();
-  SpanAttributeWriter<float> uv_rotations = attributes.lookup_or_add_for_write_span<float>(
+  SpanAttributeWriter<float> uv_rotations = attributes.ensure_for_write_span<float>(
       "uv_rotation", AttrDomain::Curve);
-  SpanAttributeWriter<float2> uv_translations = attributes.lookup_or_add_for_write_span<float2>(
+  SpanAttributeWriter<float2> uv_translations = attributes.ensure_for_write_span<float2>(
       "uv_translation", AttrDomain::Curve);
-  SpanAttributeWriter<float2> uv_scales = attributes.lookup_or_add_for_write_span<float2>(
+  SpanAttributeWriter<float2> uv_scales = attributes.ensure_for_write_span<float2>(
       "uv_scale", AttrDomain::Curve, AttributeInitValue(float2(1.0f, 1.0f)));
-
-  if (!uv_rotations || !uv_translations || !uv_scales) {
-    /* FIXME: It might be better to ensure the attributes exist and are on the right domain. */
-    return;
-  }
 
   const OffsetIndices<int> points_by_curve = curves.points_by_curve();
   const Span<float3> positions = curves.positions();
@@ -4599,22 +4594,19 @@ void GreasePencil::rename_node(Main &bmain,
 
     /* Update the layer name of the influence data of the modifiers. */
     for (ModifierData &md : object.modifiers) {
-      char *dst_layer_name = nullptr;
-      size_t dst_layer_name_maxncpy = 0;
+      MutableCStr dst_layer_name;
       /* LineArt doesn't use the `GreasePencilModifierInfluenceData` struct. */
       if (md.type == eModifierType_GreasePencilLineart) {
         auto *lmd = reinterpret_cast<GreasePencilLineartModifierData *>(&md);
-        dst_layer_name = lmd->target_layer;
-        dst_layer_name_maxncpy = sizeof(lmd->target_layer);
+        dst_layer_name = MutableCStr(lmd->target_layer);
       }
       else if (GreasePencilModifierInfluenceData *influence_data = influence_data_from_modifier(
                    &md))
       {
-        dst_layer_name = influence_data->layer_name;
-        dst_layer_name_maxncpy = sizeof(influence_data->layer_name);
+        dst_layer_name = MutableCStr(influence_data->layer_name);
       }
-      if (dst_layer_name && STREQ(dst_layer_name, old_name.c_str())) {
-        BLI_strncpy(dst_layer_name, node.name().c_str(), dst_layer_name_maxncpy);
+      if (!dst_layer_name.is_empty() && STREQ(dst_layer_name.data(), old_name.c_str())) {
+        STRNCPY(dst_layer_name, node.name().c_str());
       }
     }
   }

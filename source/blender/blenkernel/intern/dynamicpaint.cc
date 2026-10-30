@@ -394,11 +394,10 @@ static void surface_setUniqueOutputName(DynamicPaintSurface *surface, char *base
   char name[64];
   STRNCPY(name, basename); /* in case basename is surface->name use a copy */
   if (output == 0) {
-    BLI_uniquename_cb(is_unique_fn, name, '.', surface->output_name, sizeof(surface->output_name));
+    BLI_uniquename_cb(is_unique_fn, name, '.', surface->output_name);
   }
   else if (output == 1) {
-    BLI_uniquename_cb(
-        is_unique_fn, name, '.', surface->output_name2, sizeof(surface->output_name2));
+    BLI_uniquename_cb(is_unique_fn, name, '.', surface->output_name2);
   }
 }
 
@@ -425,8 +424,7 @@ void dynamicPaintSurface_setUniqueName(DynamicPaintSurface *surface, const char 
       },
       name,
       '.',
-      surface->name,
-      sizeof(surface->name));
+      surface->name);
 }
 
 void dynamicPaintSurface_updateType(DynamicPaintSurface *surface)
@@ -1115,8 +1113,7 @@ DynamicPaintSurface *dynamicPaint_createNewSurface(DynamicPaintCanvasSettings *c
   surface->wave_spring = 0.20f;
   surface->wave_smoothness = 1.0f;
 
-  BKE_modifier_path_init(
-      surface->image_output_path, sizeof(surface->image_output_path), "cache_dynamicpaint");
+  BKE_modifier_path_init(surface->image_output_path, "cache_dynamicpaint");
 
   /* Using ID_BRUSH i18n context, as we have no physics/dynamic-paint one for now. */
   dynamicPaintSurface_setUniqueName(surface, CTX_DATA_(BLT_I18NCONTEXT_ID_BRUSH, "Surface"));
@@ -2001,23 +1998,24 @@ static Mesh *dynamicPaint_Modifier_apply(DynamicPaintModifierData *pmd, Object *
                   surface->output_name2, AttrDomain::Corner);
             }
 
-            data.ob = ob;
-            data.corner_verts = corner_verts;
-            data.faces = faces;
-            data.mloopcol = mloopcol.span;
-            data.mloopcol_wet = mloopcol_wet.span;
+            if (mloopcol && mloopcol_wet) {
+              data.ob = ob;
+              data.corner_verts = corner_verts;
+              data.faces = faces;
+              data.mloopcol = mloopcol.span;
+              data.mloopcol_wet = mloopcol_wet.span;
 
-            {
-              TaskParallelSettings settings;
-              BLI_parallel_range_settings_defaults(&settings);
-              settings.use_threading = (faces.size() > 1000);
-              BLI_task_parallel_range(
-                  0, faces.size(), &data, dynamic_paint_apply_surface_vpaint_cb, &settings);
+              {
+                TaskParallelSettings settings;
+                BLI_parallel_range_settings_defaults(&settings);
+                settings.use_threading = (faces.size() > 1000);
+                BLI_task_parallel_range(
+                    0, faces.size(), &data, dynamic_paint_apply_surface_vpaint_cb, &settings);
+              }
+
+              mloopcol.finish();
+              mloopcol_wet.finish();
             }
-
-            mloopcol.finish();
-            mloopcol_wet.finish();
-
             MEM_delete(fcolor);
           }
           /* vertex group paint */
@@ -3331,7 +3329,7 @@ void dynamicPaint_outputSurfaceImage(DynamicPaintSurface *surface,
     return;
   }
   STRNCPY(output_file, filepath);
-  BKE_image_path_ext_from_imtype_ensure(output_file, sizeof(output_file), format);
+  BKE_image_path_ext_from_imtype_ensure(output_file, format);
 
   /* Validate output file path */
   BLI_path_abs(output_file, BKE_main_blendfile_path_from_global());
