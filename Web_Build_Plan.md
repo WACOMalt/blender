@@ -106,8 +106,13 @@ Decisions by the repo owner (2026-10-28):
   others are emulated with a storage buffer holding the texels in the texture's bit layout,
   synchronized with the texture by compute/render passes when the texture is used (the same idea
   as Metal's buffer-backed atomic textures). See `wg_shader.hh`.
+- WebGPU usage rules the other APIs don't have, handled by the backend: a buffer can't be
+  bound writable and read-only (or as uniform data) by the same draw (the read-only binding gets
+  a temporary copy; uniform buffers bound as storage buffers use their own device buffer), a
+  pipeline whose creation failed is skipped (an error scope captures the failure, binding an
+  invalid pipeline would invalidate the whole command buffer).
 - EEVEE (in progress, `?env=BLENDER_WEBGPU_EEVEE=1` on the page enables it): all of its
-  shaders translate and compile on WebGPU now. Material Preview and Rendered shading still use
+  shaders translate and compile on WebGPU now, and its frames are submitted. Material Preview and Rendered shading still use
   Workbench by default (and F12 renders with EEVEE report an error) until EEVEE is verified on
   real GPUs: the headless test environment (SwiftShader) only has WebGPU's default limits, which
   EEVEE exceeds (`maxComputeInvocationsPerWorkgroup` 256 < 1024 for several compute shaders,
