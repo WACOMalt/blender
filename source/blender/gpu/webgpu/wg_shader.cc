@@ -643,7 +643,8 @@ static void print_sampled_image(std::ostream &os,
  */
 static void wg_rewrite_image_calls(std::string &glsl,
                                    const StringRef function,
-                                   const Set<std::string> &names)
+                                   const Set<std::string> &names,
+                                   const StringRef helper)
 {
   const std::string pattern = function + "(";
   size_t pos = 0;
@@ -674,7 +675,7 @@ static void wg_rewrite_image_calls(std::string &glsl,
           args++;
         }
       }
-      const std::string replacement = name + "_wg_" + function + "(";
+      const std::string replacement = name + "_wg_" + helper + "(";
       glsl.replace(pos, args - pos, replacement);
       pos += replacement.size();
       continue;
@@ -1466,12 +1467,15 @@ static void wg_glsl_workarounds(const ShaderCreateInfo &info, std::string &glsl)
                                  "imageAtomicExchange",
                                  "imageAtomicCompSwap"})
     {
-      wg_rewrite_image_calls(glsl, function, emulated_images);
+      wg_rewrite_image_calls(glsl, function, emulated_images, function);
     }
+    /* Blender's variants without bounds checks. */
+    wg_rewrite_image_calls(glsl, "imageLoadFast", emulated_images, "imageLoad");
+    wg_rewrite_image_calls(glsl, "imageStoreFast", emulated_images, "imageStore");
   }
   if (!emulated_samplers.is_empty()) {
     for (const char *function : {"texelFetch", "textureSize"}) {
-      wg_rewrite_image_calls(glsl, function, emulated_samplers);
+      wg_rewrite_image_calls(glsl, function, emulated_samplers, function);
     }
   }
 
@@ -1725,8 +1729,19 @@ void WGShader::build_module(const ShaderCreateInfo &info,
     }
     print_log(sources, log.c_str(), stage_name, true, &parser);
     if (G.debug & G_DEBUG_GPU) {
-      /* The translated source, to reproduce the error with `web/shader_compiler/wsc_test`. */
-      printf("WebGPU GLSL of %s (%s):\n%s\nEND OF GLSL\n", name, stage_name, glsl.c_str());
+      /* The translated source, to reproduce the error with `web/shader_compiler/wsc_test`.
+       * The browser truncates long console lines, break them at statements. */
+      std::string wrapped;
+      size_t line_len = 0;
+      for (size_t i = 0; i < glsl.size(); i++) {
+        wrapped += glsl[i];
+        line_len = (glsl[i] == '\n') ? 0 : line_len + 1;
+        if (line_len > 600 && glsl[i] == ';' && i + 1 < glsl.size() && glsl[i + 1] == ' ') {
+          wrapped += "\n   ";
+          line_len = 0;
+        }
+      }
+      printf("WebGPU GLSL of %s (%s):\n%s\nEND OF GLSL\n", name, stage_name, wrapped.c_str());
     }
     compilation_failed_ = true;
     WSC_result_free(&result);

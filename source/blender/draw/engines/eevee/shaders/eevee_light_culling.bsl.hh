@@ -86,7 +86,10 @@ void cull_main([[resource_table]] Cull &srt,
           return;
         }
       }
-      [[fallthrough]];
+      /* Same as the other local lights (no `switch` fall-through, WGSL doesn't have it). */
+      sphere.center = light.position();
+      sphere.radius = light.local.local.influence_radius_max;
+      break;
     }
     case LIGHT_RECT:
     case LIGHT_ELLIPSE:
@@ -430,8 +433,14 @@ void tile_main([[resource_table]] const draw::View &views,
           intersect_tile = intersect_tile && tile.intersect(pyramid);
           break;
         }
-        /* Fall-through to the hemispheric case. */
-        [[fallthrough]];
+        /* Same as the hemispheric case below (no `switch` fall-through, WGSL doesn't have it). */
+        float3 v000 = vP - v_right * radius - v_up * radius;
+        float3 v100 = v000 + v_right * (radius * 2.0f);
+        float3 v010 = v000 + v_up * (radius * 2.0f);
+        float3 v001 = v000 - v_back * radius;
+        Box bbox = shape_box(v000, v100, v010, v001);
+        intersect_tile = intersect_tile && tile.intersect(bbox);
+        break;
       }
       case LIGHT_RECT:
       case LIGHT_ELLIPSE: {
