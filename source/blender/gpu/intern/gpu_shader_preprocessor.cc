@@ -1653,7 +1653,10 @@ struct Preprocessor {
 
 std::string Shader::run_preprocessor(StringRef source, bool no_dead_code_elimination)
 {
-  BLI_assert_msg(source.find("//") == std::string::npos && source.find("/*") == std::string::npos,
+  /* NOTE: `StringRef::find` returns `not_found`, not `std::string::npos` (which differs on 32 bit
+   * platforms). */
+  BLI_assert_msg(source.find("//") == StringRef::not_found &&
+                     source.find("/*") == StringRef::not_found,
                  "Input source to the preprocessor should have no comments.");
 
   if (G.debug & G_DEBUG_GPU_SHADER_NO_PREPROCESSOR) {
