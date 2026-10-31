@@ -754,6 +754,10 @@ void Instance::draw_viewport()
     GPU_framebuffer_clear_color_depth(dfbl->default_fb, double4(0.0), 1.0f);
     if (!is_loaded(needed_shaders & ~WORLD_SHADERS)) {
       info_append_i18n("Compiling EEVEE engine shaders");
+      if (G.debug & G_DEBUG_GPU) {
+        printf("EEVEE: waiting for shader groups 0x%x\n",
+               uint32_t(needed_shaders & ~WORLD_SHADERS & ~loaded_shaders));
+      }
       DRW_viewport_request_redraw();
     }
     /* Do not swap if the velocity module didn't go through a full sync cycle. */

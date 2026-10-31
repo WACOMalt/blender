@@ -514,7 +514,8 @@ void WGDevice::execute_draw(const WGCmdDraw &cmd, const uint8_t *trailing, Execu
     return;
   }
   WGPURenderPipeline pipeline = render_pipelines_.lookup_default(cmd.pipeline, nullptr);
-  if (pipeline == nullptr) {
+  if (pipeline == nullptr || invalid_pipelines_.contains(cmd.pipeline)) {
+    /* An invalid pipeline would invalidate the whole command buffer. */
     return;
   }
   WGPURenderPassEncoder pass = state.render_pass;
@@ -580,7 +581,8 @@ void WGDevice::execute_dispatch(const WGCmdDispatch &cmd,
                                 ExecuteState &state)
 {
   WGPUComputePipeline pipeline = compute_pipelines_.lookup_default(cmd.pipeline, nullptr);
-  if (pipeline == nullptr) {
+  if (pipeline == nullptr || invalid_pipelines_.contains(cmd.pipeline)) {
+    /* An invalid pipeline would invalidate the whole command buffer. */
     return;
   }
   wg_interrupt_render_pass(state.render_pass, state.render_pass_id);
@@ -716,7 +718,9 @@ void WGDevice::execute_create_render_pipeline(const WGCmdCreateRenderPipeline &c
     fragment.targets = targets;
     desc.fragment = &fragment;
   }
+  pipeline_error_scope_push();
   render_pipelines_.add_overwrite(cmd.pipeline, wgpuDeviceCreateRenderPipeline(device_, &desc));
+  pipeline_error_scope_pop(cmd.pipeline);
 }
 
 void WGDevice::destroy_object(WGObjectID id)
@@ -749,10 +753,40 @@ void WGDevice::destroy_object(WGObjectID id)
   }
   else if (WGPURenderPipeline pipeline = render_pipelines_.pop_default(id, nullptr)) {
     wgpuRenderPipelineRelease(pipeline);
+    invalid_pipelines_.remove(id);
   }
   else if (WGPUComputePipeline pipeline = compute_pipelines_.pop_default(id, nullptr)) {
     wgpuComputePipelineRelease(pipeline);
+    invalid_pipelines_.remove(id);
   }
+}
+
+void WGDevice::pipeline_error_scope_push()
+{
+  wgpuDevicePushErrorScope(device_, WGPUErrorFilter_Validation);
+}
+
+void WGDevice::pipeline_error_scope_pop(const WGObjectID pipeline)
+{
+  WGPUPopErrorScopeCallbackInfo callback = {};
+  callback.mode = WGPUCallbackMode_AllowSpontaneous;
+  callback.callback = [](WGPUPopErrorScopeStatus /*status*/,
+                         WGPUErrorType type,
+                         WGPUStringView message,
+                         void *userdata1,
+                         void *userdata2) {
+    if (type == WGPUErrorType_NoError) {
+      return;
+    }
+    WGDevice *device = static_cast<WGDevice *>(userdata1);
+    const WGObjectID id = WGObjectID(reinterpret_cast<uintptr_t>(userdata2));
+    device->invalid_pipelines_.add(id);
+    /* Reported like uncaptured errors. */
+    fprintf(stderr, "WebGPU pipeline error: %s\n", wg_string_get(message).c_str());
+  };
+  callback.userdata1 = this;
+  callback.userdata2 = reinterpret_cast<void *>(uintptr_t(pipeline));
+  wgpuDevicePopErrorScope(device_, callback);
 }
 
 static WGPUBindGroupLayoutEntry wg_bind_group_layout_entry(const WGBindingLayout &binding)
@@ -982,8 +1016,10 @@ void WGDevice::execute(WGCommandStream &stream, void *wait_ctx)
               cmd.constants_len);
           desc.compute.constantCount = pipeline_constants.entries.size();
           desc.compute.constants = pipeline_constants.entries.data();
+          pipeline_error_scope_push();
           compute_pipelines_.add_overwrite(cmd.pipeline,
                                            wgpuDeviceCreateComputePipeline(device_, &desc));
+          pipeline_error_scope_pop(cmd.pipeline);
         }
         break;
       }

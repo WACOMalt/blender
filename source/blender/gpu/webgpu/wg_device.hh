@@ -16,6 +16,7 @@
 #include <string>
 
 #include "BLI_map.hh"
+#include "BLI_set.hh"
 
 #include "wg_commands.hh"
 
@@ -117,6 +118,9 @@ class WGDevice {
   void execute_sync_buffer_image(const WGCmdSyncBufferImage &cmd, ExecuteState &state);
   /** Buffer of an emulated image, created when needed. Null for unknown textures. */
   WGPUBuffer buffer_image_get(WGObjectID texture, uint32_t mip);
+  /** Error scope around the creation of a pipeline, failures mark it invalid. */
+  void pipeline_error_scope_push();
+  void pipeline_error_scope_pop(WGObjectID pipeline);
   WGPUShaderModule shader_module_create(const std::string &wgsl);
   void destroy_object(WGObjectID id);
 
@@ -150,6 +154,8 @@ class WGDevice {
   Map<WGObjectID, PipelineLayoutEntry> pipeline_layouts_;
   Map<WGObjectID, WGPURenderPipeline> render_pipelines_;
   Map<WGObjectID, WGPUComputePipeline> compute_pipelines_;
+  /** Pipelines whose creation failed (reported by an error scope), their draws are skipped. */
+  Set<WGObjectID> invalid_pipelines_;
 
   /** Pipelines of #execute_clear_attachments, keyed by the pass formats. */
   Map<std::string, WGPURenderPipeline> clear_pipelines_;
