@@ -19,6 +19,8 @@
 #include "wg_buffer.hh"
 #include "wg_common.hh"
 #include "wg_misc.hh"
+#include <cmath>
+
 #include "wg_texture.hh"
 
 namespace blender::gpu {
@@ -414,9 +416,13 @@ void WGTexture::clear(double4 data)
   if (!is_usable()) {
     return;
   }
-  /* Render-able textures are cleared by render passes, depth can't be uploaded. */
+  /* Render-able textures are cleared by render passes, depth can't be uploaded.
+   * The browser rejects non-finite clear values, those are uploaded. */
+  const bool is_finite = std::isfinite(data[0]) && std::isfinite(data[1]) &&
+                         std::isfinite(data[2]) && std::isfinite(data[3]);
   if (wg_texture_format_is_renderable(device_format_) &&
-      !ELEM(type_, GPU_TEXTURE_1D, GPU_TEXTURE_3D, GPU_TEXTURE_BUFFER))
+      !ELEM(type_, GPU_TEXTURE_1D, GPU_TEXTURE_3D, GPU_TEXTURE_BUFFER) &&
+      (is_finite || (format_flag_ & GPU_FORMAT_DEPTH)))
   {
     const bool is_depth = (format_flag_ & GPU_FORMAT_DEPTH) != 0;
     const int layers = (type_ & (GPU_TEXTURE_ARRAY | GPU_TEXTURE_CUBE)) ? layer_count() : 1;
