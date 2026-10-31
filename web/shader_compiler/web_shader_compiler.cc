@@ -126,7 +126,11 @@ static WSC_Result glsl_to_wgsl(const char *glsl,
 
   /* The bindings the entry point uses, the others don't need to be visible to its stage. */
   tint::Source::File file("", output->wgsl);
-  tint::Program program = tint::wgsl::reader::Parse(&file);
+  tint::wgsl::reader::Options parse_options;
+  parse_options.allowed_features = tint::wgsl::AllowedFeatures::Everything();
+  tint::Program program = tint::wgsl::reader::Parse(&file, parse_options);
+  /* -1 when unknown, the caller then assumes all bindings are used. */
+  result.bindings_len = -1;
   if (program.IsValid()) {
     tint::inspector::Inspector inspector(program);
     const std::vector<tint::inspector::ResourceBinding> bindings = inspector.GetResourceBindings(

@@ -1787,7 +1787,10 @@ void WGShader::build_module(const ShaderCreateInfo &info,
     return;
   }
 
-  for (const WSC_Binding &binding : Span(result.bindings, result.bindings_len)) {
+  if (result.bindings_len < 0) {
+    all_bindings_used_[stage] = true;
+  }
+  for (const WSC_Binding &binding : Span(result.bindings, std::max(result.bindings_len, 0))) {
     if (binding.group == 0) {
       used_bindings_[stage].add(binding.binding);
     }
@@ -1851,10 +1854,14 @@ bool WGShader::finalize(const ShaderCreateInfo *info)
       return layout.visibility;
     }
     WGPUShaderStage visibility = WGPUShaderStage_None;
-    if (used_bindings_[WSC_STAGE_VERTEX].contains(layout.binding)) {
+    if (all_bindings_used_[WSC_STAGE_VERTEX] ||
+        used_bindings_[WSC_STAGE_VERTEX].contains(layout.binding))
+    {
       visibility |= WGPUShaderStage_Vertex;
     }
-    if (used_bindings_[WSC_STAGE_FRAGMENT].contains(layout.binding)) {
+    if (all_bindings_used_[WSC_STAGE_FRAGMENT] ||
+        used_bindings_[WSC_STAGE_FRAGMENT].contains(layout.binding))
+    {
       visibility |= WGPUShaderStage_Fragment;
     }
     visibility &= layout.visibility;

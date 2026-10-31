@@ -124,6 +124,8 @@ class WGShader : public Shader {
   Vector<uint32_t> used_constant_ids_;
   /** Bindings (of group 0) used by each stage (#WSC_Stage), for the stage visibility. */
   Set<uint32_t> used_bindings_[3];
+  /** The used bindings of the stage are unknown, all are assumed used. */
+  bool all_bindings_used_[3] = {false, false, false};
 
   std::mutex pipelines_mutex_;
   Map<WGRenderPipelineKey, WGObjectID> render_pipelines_;

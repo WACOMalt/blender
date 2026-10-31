@@ -44,7 +44,7 @@ typedef struct WSC_Result {
   char *wgsl;
   /** Errors and warnings, or null. */
   char *log;
-  /** Resource bindings used by the entry point (after the sampler mappings). */
+  /** Resource bindings used by the entry point (after the sampler mappings), -1 when unknown. */
   WSC_Binding *bindings;
   int bindings_len;
 } WSC_Result;

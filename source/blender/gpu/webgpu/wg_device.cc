@@ -1466,10 +1466,10 @@ void WGDevice::execute_sync_buffer_image(const WGCmdSyncBufferImage &cmd, Execut
       wgsl += scalar + ">;\n";
       wgsl += "@group(0) @binding(1) var<storage, read_write> buf : array<u32>;\n";
       wgsl += "struct Meta { size : vec4<u32> };\n";
-      wgsl += "@group(0) @binding(2) var<uniform> meta : Meta;\n";
+      wgsl += "@group(0) @binding(2) var<uniform> wg_meta : Meta;\n";
       wgsl += "@compute @workgroup_size(8, 8, 1)\n";
       wgsl += "fn main(@builtin(global_invocation_id) id : vec3<u32>) {\n";
-      wgsl += "  if (id.x >= meta.size.x || id.y >= meta.size.y || id.z >= meta.size.z) { return; }\n";
+      wgsl += "  if (id.x >= wg_meta.size.x || id.y >= wg_meta.size.y || id.z >= wg_meta.size.z) { return; }\n";
       wgsl += "  let v : vec4<" + scalar + "> = textureLoad(tex, ";
       wgsl += is_3d    ? "vec3<i32>(id.xyz), 0" :
               is_array ? "vec2<i32>(id.xy), i32(id.z), 0" :
@@ -1477,7 +1477,7 @@ void WGDevice::execute_sync_buffer_image(const WGCmdSyncBufferImage &cmd, Execut
       wgsl += ");\n";
       wgsl += "  var w : array<u32, " + words + ">;\n";
       wgsl += "  " + pack + "\n";
-      wgsl += "  let i : u32 = (id.x + id.y * meta.size.x + id.z * meta.size.x * meta.size.y) * " +
+      wgsl += "  let i : u32 = (id.x + id.y * wg_meta.size.x + id.z * wg_meta.size.x * wg_meta.size.y) * " +
               words + "u;\n";
       for (int k = 0; k < layout.words; k++) {
         wgsl += "  buf[i + " + std::to_string(k) + "u] = w[" + std::to_string(k) + "];\n";
@@ -1538,11 +1538,11 @@ void WGDevice::execute_sync_buffer_image(const WGCmdSyncBufferImage &cmd, Execut
     wgsl += "}\n";
     wgsl += "@group(0) @binding(1) var<storage, read> buf : array<u32>;\n";
     wgsl += "struct Meta { size : vec4<u32> };\n";
-    wgsl += "@group(0) @binding(2) var<uniform> meta : Meta;\n";
+    wgsl += "@group(0) @binding(2) var<uniform> wg_meta : Meta;\n";
     wgsl += "@fragment fn fs(@builtin(position) pos : vec4<f32>) -> @location(0) vec4<" + scalar +
             "> {\n";
-    wgsl += "  let co = vec3<u32>(u32(pos.x), u32(pos.y), meta.size.w);\n";
-    wgsl += "  let i : u32 = (co.x + co.y * meta.size.x + co.z * meta.size.x * meta.size.y) * " +
+    wgsl += "  let co = vec3<u32>(u32(pos.x), u32(pos.y), wg_meta.size.w);\n";
+    wgsl += "  let i : u32 = (co.x + co.y * wg_meta.size.x + co.z * wg_meta.size.x * wg_meta.size.y) * " +
             words + "u;\n";
     wgsl += "  var w : array<u32, " + words + ">;\n";
     for (int k = 0; k < layout.words; k++) {
