@@ -19,6 +19,10 @@
   const statusText = document.getElementById('status');
   const progressBar = document.getElementById('progress-bar');
 
+  /* Timeline in the console, to see where the start-up time goes. */
+  const t0 = performance.now();
+  const mark = what => console.log(`loader: ${what} at ${((performance.now() - t0) / 1000).toFixed(1)}s`);
+
   function setStatus(text, fraction) {
     statusText.textContent = text;
     if (fraction !== undefined) {
@@ -76,6 +80,7 @@
     fail(`Failed to download Blender's data files: ${error.message}`);
     return;
   }
+  mark('data files downloaded');
   setStatus('Starting Blender…', 1.0);
 
   const params = new URLSearchParams(location.search);
@@ -141,6 +146,7 @@
           }
         }, true);
         window.addEventListener('focus', readClipboard);
+        mark('data files written to the file-system');
         /* Load the home directory from IndexedDB before Blender starts. */
         FS.mkdirTree(HOME);
         FS.mount(module.IDBFS, {}, HOME);
@@ -149,6 +155,7 @@
           if (error) {
             console.error('Loading files from IndexedDB failed:', error);
           }
+          mark('home directory loaded from IndexedDB');
           module.removeRunDependency('idbfs');
         });
         for (const [path, bytes] of extra_files) {

@@ -1870,6 +1870,11 @@ void WGDevice::execute_clear_attachments(const WGCmdClearAttachments &cmd, Execu
 
 void WGDevice::execute_present(const WGCmdPresent &cmd, ExecuteState &state)
 {
+  static bool first_present = true;
+  if (first_present) {
+    first_present = false;
+    printf("WebGPU: first frame presented\n");
+  }
   const TextureEntry *source = textures_.lookup_ptr(cmd.texture);
   WGPUTexture surface = texture_get(WG_SURFACE_TEXTURE_ID, state);
   if (source == nullptr || surface == nullptr) {
