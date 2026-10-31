@@ -1708,6 +1708,9 @@ void WGShader::build_module(const ShaderCreateInfo &info,
   const char *stage_name = stage == WSC_STAGE_VERTEX   ? "vertex" :
                            stage == WSC_STAGE_FRAGMENT ? "fragment" :
                                                          "compute";
+  if (G.debug & G_DEBUG_GPU) {
+    printf("WebGPU shader compile: %s (%s)\n", name, stage_name);
+  }
   std::string patch = wg_glsl_patch(stage_define);
   if (glsl_uses_integer_samplers(info)) {
     patch += WG_INTEGER_TEXTURE_FUNCTIONS;
@@ -1904,6 +1907,9 @@ bool WGShader::finalize(const ShaderCreateInfo *info)
   cmd.bind_group_layouts[0] = bind_group_layouts_[0];
   cmd.bind_group_layouts[1] = bind_group_layouts_[1];
   record.stream.push(WGCommandType::CreatePipelineLayout, cmd);
+  if (G.debug & G_DEBUG_GPU) {
+    printf("WebGPU shader ready: %s\n", name);
+  }
   return true;
 }
 
