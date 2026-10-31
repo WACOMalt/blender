@@ -163,6 +163,18 @@ build_tiff() {
   cmake_build tiff "$SRC/tiff" \
     -Dlzma=OFF -Djbig=OFF -Dzstd=OFF -Dwebp=OFF -Dlerc=OFF -Dlibdeflate=ON -Dcxx=OFF \
     -Dtiff-tests=OFF -Dtiff-tools=OFF -Dtiff-docs=OFF -Dtiff-contrib=OFF -Dsphinx=OFF
+  # The exported TiffConfig.cmake references Deflate::Deflate but does not find
+  # it ("TODO: import dependencies" upstream); define the target for consumers.
+  local cfg="$PREFIX/lib/cmake/tiff/TiffConfig.cmake"
+  if ! grep -q 'Deflate::Deflate' "$cfg"; then
+    local shim='if(NOT TARGET Deflate::Deflate)
+  add_library(Deflate::Deflate UNKNOWN IMPORTED)
+  set_target_properties(Deflate::Deflate PROPERTIES
+    IMPORTED_LOCATION "${CMAKE_CURRENT_LIST_DIR}/../../libdeflate.a"
+    INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_LIST_DIR}/../../../include")
+endif()'
+    printf '%s\n%s' "$shim" "$(cat "$cfg")" > "$cfg"
+  fi
 }
 
 build_robinmap() {
@@ -289,6 +301,12 @@ fetch_dawn() {
     ad9184e76a66b1001c29db9b0a3e87f646c64de0
   fetch_commit "$third_party/spirv-tools/src" https://github.com/KhronosGroup/SPIRV-Tools \
     ff5c50339cc1e9f34f04cb440a3e5fe89db0161d
+  # Dawn's code generator imports these; an empty third_party/jinja2 shadows any
+  # system copy as a namespace package, so fetch them at the DEPS commits.
+  fetch_commit "$third_party/jinja2" https://chromium.googlesource.com/chromium/src/third_party/jinja2 \
+    c3027d884967773057bf74b957e3fea87e5df4d7
+  fetch_commit "$third_party/markupsafe" https://chromium.googlesource.com/chromium/src/third_party/markupsafe \
+    4256084ae14175d38a3ff7d739dca83ae49ccec6
   if [ ! -f "$third_party/abseil-cpp/CMakeLists.txt" ]; then
     rm -rf "$third_party/abseil-cpp"
     git -c advice.detachedHead=false clone -q --depth 1 --branch 20260107.0 \

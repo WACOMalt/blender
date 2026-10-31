@@ -4,15 +4,25 @@ Goal: keep an up-to-date build of Blender that runs in a desktop web browser
 (Chrome and Firefox first), with as many features as are practical.
 Hosting/deployment (blender.bsums.xyz) is handled by the repo owner and is out of scope.
 
-Status: **Phase 2 done, Phase 3 in progress.** The Emscripten toolchain, all
+Status: **Phase 3 done — the full UI build is deployed and runs in a browser**
+(first deployment to blender.bsums.xyz on 2026-10-30: WebGPU viewport, Edit mode,
+Python/`bpy`, CPU Cycles, `.blend` load/save). The Emscripten toolchain, all
 dependencies (including CPython 3.13) and the CMake platform support work, see
-`web/README.md`. Headless Blender runs under node (loads `.blend` files, Python works).
-Cycles (CPU) is being enabled. The windowed build has a GHOST backend for the canvas and a
-WebGPU GPU backend in `source/blender/gpu/webgpu/` (written, being brought up in Chromium).
+`web/README.md`. **Current focus: the WebGL2 backend (section "WebGL2 backend plan").**
 
 Decisions by the repo owner (2026-10-28):
 - GPU: **WebGPU is the primary backend, with a reduced WebGL2 fallback** for browsers without WebGPU.
 - No intermediate demo page: go **straight to the full Blender UI** after the headless bring-up.
+
+Decisions by the repo owner (2026-10-31):
+- **The WebGL2 backend is now a committed, top-priority deliverable — not a
+  nice-to-have.** Field experience with the first deployment showed WebGPU is
+  effectively unavailable to most Linux desktop visitors (Firefox has no WebGPU
+  on Linux; Chromium on Wayland cannot use Vulkan, so NVIDIA setups get no core
+  adapter; Brave's GPU-process sandbox blocks the Vulkan ICDs). WebGL2 is the
+  only universally available path, so the page must run on it.
+- Detection order on the page: WebGPU core → WebGPU compatibility mode (if the
+  investigation below pans out) → **WebGL2** → a clear "unsupported browser" message.
 
 ## 1. Constraints and realities
 
@@ -128,6 +138,43 @@ Decisions by the repo owner (2026-10-28):
   camera plane (one end behind the camera; `web/tests/lineclip.html` reproduces it without
   Blender). The near part of the viewport grid is missing in those screenshots, not on a GPU.
 
+### WebGL2 backend plan (`source/blender/gpu/webgl/`) — top priority (2026-10-31)
+
+Goal: every visitor with a WebGL2 browser gets a working Blender, with features
+degrading honestly by what GLES 3.0 can express. Staged so each stage ships:
+
+1. **Stage W1 — boot + 2D UI on WebGL2.** A `GPUBackend` implementation on GLES 3.0
+   (`-sMAX_WEBGL_VERSION=2`), modeled on the OpenGL backend (~11k lines, the smallest).
+   The blockers the GPU survey found, and their W1 answers:
+   - Text, wide/smooth lines and node links read vertex data from storage buffers →
+     rewrite these shaders' data paths as vertex attributes / UBOs / textures
+     (texture-as-buffer: texelFetch on a 2D texture is the standard GLES 3.0 trick).
+   - Shaders: the runtime GLSL → ESSL 3.00 path (no SPIR-V/WGSL needed); reuse the
+     preprocessor; push constants become a UBO like on Vulkan/WebGPU.
+   - No compute, no SSBO, no image load/store anywhere in W1 code paths; gate with a
+     real capability flag (`GPU_compute_support()` etc. must finally mean something).
+   Exit: UI, Properties, Outliner, Image/UV editor, Text editor, Python console work.
+   F12 with CPU Cycles works (render result displayed as a texture). No 3D viewport.
+2. **Stage W2 — 3D viewport investigation.** The draw manager assumes compute +
+   SSBO + multi-draw-indirect. Scope honestly: either (a) a reduced legacy-style
+   viewport path (depsgraph-evaluated meshes drawn with plain vertex buffers,
+   Workbench-style shading without the compute culling/visibility pipeline), or
+   (b) declare the viewport WebGPU-only and make W1's no-viewport mode first-class
+   (clear message in the viewport area, everything else usable). Decide after W1
+   ships by measuring what (a) actually costs.
+3. **Parallel investigation — WebGPU compatibility mode.** Dawn exposes a
+   GLES-backed "compatibility mode" adapter on configurations where core WebGPU is
+   unavailable (observed on the owner's stock Wayland Chromium: hardware
+   RTX 3090 adapter, compat only). Compat is GLES-3.1-class: compute and storage
+   buffers exist with restrictions, so the existing WebGPU backend might run with
+   modest changes (request `featureLevel: "compatibility"` as fallback in GHOST's
+   adapter request, then fix validation failures). If this works it covers
+   Chromium-family Linux browsers with the full viewport at a fraction of W2's
+   cost — but it does nothing for Firefox, so it complements W1, not replaces it.
+
+Non-goals for WebGL2: EEVEE, Material Preview, GPU compositor, anything needing
+image load/store. Those stay WebGPU-only.
+
 ## 3. Dependency strategy
 
 Build every library from source with Emscripten into `build_web/deps` through a
@@ -155,6 +202,12 @@ Ceres/libmv (motion tracking), Collada, Draco, MaterialX, Potrace, SDL.
 - Smoke test: `web/build_smoke.sh` compiles and runs a C program under node.
 - Decide where large intermediate artifacts live (CI cache / release assets), since cloud disks are ephemeral.
 - Add a CI workflow once the smoke test passes in a cloud session.
+
+### Phase 4: WebGL2 backend (current)
+- [ ] Stage W1: boot + 2D UI on WebGL2 (see "WebGL2 backend plan"); page falls back
+      WebGPU → WebGL2 automatically and says which backend is active.
+- [ ] Compat-mode investigation (may land before or alongside W1; small, high value).
+- [ ] Stage W2 decision: reduced viewport vs. first-class no-viewport mode.
 
 ### Phase 3: Get something, anything, built
 Minimum deployable output, in order of ambition:
@@ -184,7 +237,7 @@ and `.data` that the owner can serve from a static host.** Stop there.
 5. Build `blenlib` + `dna` for wasm.
 6. CPython for wasm32 and `bpy` bring-up.
 7. GHOST Emscripten backend (canvas, input, clipboard).
-8. GPU: WebGL2 backend, Workbench.
+8. GPU: WebGL2 backend (**top priority** — see "WebGL2 backend plan": W1 UI first, viewport decision after).
 9. Virtual filesystem: IDBFS persistence, File System Access API integration.
 10. Threading: pthread pool and cross-origin isolation requirements doc.
 11. GPU: WebGPU backend (Chrome/Firefox).

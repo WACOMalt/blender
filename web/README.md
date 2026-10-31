@@ -5,8 +5,10 @@ in a web browser. See `../Web_Build_Plan.md` for the plan and current status.
 
 ## Build
 
-Requirements: Linux, CMake 3.20+, Ninja, git, curl, ~25 GB disk. Network access to
+Requirements: Linux, CMake 3.20+, Ninja, git, git-lfs, curl, ~25 GB disk. Network access to
 GitHub (git clone and release downloads), SourceForge and GitLab.
+CMake 4.2.0 to 4.3.3 can not build Emscripten libraries (zlib fails with "multiple rules
+generate libz.a"); use another version, for example `pip install cmake==3.31.6` in a venv.
 
 ```bash
 source web/setup_emsdk.sh     # installs and activates the pinned Emscripten SDK
