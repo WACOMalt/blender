@@ -949,10 +949,9 @@ const char *GPU_texture_format_name(TextureFormat texture_format)
       return "DEPTH_COMPONENT16";
 
     case TextureFormat::Invalid:
-      BLI_assert_unreachable();
       return "Invalid";
   }
-  BLI_assert_unreachable();
+  /* Also used to report invalid values in debug messages, don't abort. */
   return "";
 }
 

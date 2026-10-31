@@ -34,11 +34,19 @@ typedef struct WSC_SamplerMapping {
   uint32_t sampler_binding;
 } WSC_SamplerMapping;
 
+typedef struct WSC_Binding {
+  uint32_t group;
+  uint32_t binding;
+} WSC_Binding;
+
 typedef struct WSC_Result {
   /** WGSL source, or null on failure. */
   char *wgsl;
   /** Errors and warnings, or null. */
   char *log;
+  /** Resource bindings used by the entry point (after the sampler mappings). */
+  WSC_Binding *bindings;
+  int bindings_len;
 } WSC_Result;
 
 /** Must be called once before compiling. */

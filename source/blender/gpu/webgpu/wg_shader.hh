@@ -31,6 +31,7 @@
 #include <string>
 
 #include "BLI_map.hh"
+#include "BLI_set.hh"
 #include "BLI_vector.hh"
 
 #include "gpu_shader_private.hh"
@@ -121,6 +122,8 @@ class WGShader : public Shader {
   uint32_t fragment_outputs_mask_ = 0;
   /** Specialization constant ids present in the WGSL shaders. */
   Vector<uint32_t> used_constant_ids_;
+  /** Bindings (of group 0) used by each stage (#WSC_Stage), for the stage visibility. */
+  Set<uint32_t> used_bindings_[3];
 
   std::mutex pipelines_mutex_;
   Map<WGRenderPipelineKey, WGObjectID> render_pipelines_;

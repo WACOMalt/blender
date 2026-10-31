@@ -4,6 +4,9 @@
 
 #include "web_shader_compiler.h"
 
+#include "src/tint/lang/wgsl/inspector/inspector.h"
+#include "src/tint/lang/wgsl/reader/reader.h"
+
 #include <cstdlib>
 #include <cstring>
 #include <stdexcept>
@@ -86,7 +89,7 @@ static WSC_Result glsl_to_wgsl(const char *glsl,
                                const WSC_SamplerMapping *sampler_mappings,
                                int sampler_mappings_num)
 {
-  WSC_Result result = {nullptr, nullptr};
+  WSC_Result result = {nullptr, nullptr, nullptr, 0};
   std::string log;
 
   std::vector<uint32_t> spirv;
@@ -120,6 +123,20 @@ static WSC_Result glsl_to_wgsl(const char *glsl,
   }
   result.wgsl = copy_string(output->wgsl);
   result.log = copy_string(log);
+
+  /* The bindings the entry point uses, the others don't need to be visible to its stage. */
+  tint::Source::File file("", output->wgsl);
+  tint::Program program = tint::wgsl::reader::Parse(&file);
+  if (program.IsValid()) {
+    tint::inspector::Inspector inspector(program);
+    const std::vector<tint::inspector::ResourceBinding> bindings = inspector.GetResourceBindings(
+        "main");
+    result.bindings = static_cast<WSC_Binding *>(malloc(sizeof(WSC_Binding) * bindings.size()));
+    result.bindings_len = int(bindings.size());
+    for (size_t i = 0; i < bindings.size(); i++) {
+      result.bindings[i] = {bindings[i].bind_group, bindings[i].binding};
+    }
+  }
   return result;
 }
 
@@ -132,7 +149,7 @@ WSC_Result WSC_glsl_to_wgsl(const char *glsl,
     return glsl_to_wgsl(glsl, stage, sampler_mappings, sampler_mappings_num);
   }
   catch (const std::exception &error) {
-    WSC_Result result = {nullptr, copy_string(error.what())};
+    WSC_Result result = {nullptr, copy_string(error.what()), nullptr, 0};
     return result;
   }
 }
@@ -141,6 +158,9 @@ void WSC_result_free(WSC_Result *result)
 {
   free(result->wgsl);
   free(result->log);
+  free(result->bindings);
   result->wgsl = nullptr;
   result->log = nullptr;
+  result->bindings = nullptr;
+  result->bindings_len = 0;
 }

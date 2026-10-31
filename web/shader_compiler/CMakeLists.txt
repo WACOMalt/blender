@@ -71,6 +71,8 @@ target_include_directories(web_shader_compiler PRIVATE "${DAWN_DIR}" "${DAWN_THI
 target_link_libraries(web_shader_compiler PUBLIC
   tint_api
   tint_lang_spirv_reader
+  tint_lang_wgsl_inspector
+  tint_lang_wgsl_reader
   tint_lang_wgsl_writer
   glslang
   glslang-default-resource-limits

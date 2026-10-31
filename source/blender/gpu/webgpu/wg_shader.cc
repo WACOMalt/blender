@@ -1787,6 +1787,12 @@ void WGShader::build_module(const ShaderCreateInfo &info,
     return;
   }
 
+  for (const WSC_Binding &binding : Span(result.bindings, result.bindings_len)) {
+    if (binding.group == 0) {
+      used_bindings_[stage].add(binding.binding);
+    }
+  }
+
   /* Overrides that are used, pipelines can only set those. */
   const StringRef wgsl = result.wgsl;
   for (int64_t pos = wgsl.find("@id("); pos != StringRef::not_found;
@@ -1838,9 +1844,28 @@ bool WGShader::finalize(const ShaderCreateInfo *info)
     return false;
   }
 
+  /* Resources are only visible to the stages using them, they count against the per-stage
+   * limits (the interface's visibility is an upper bound). */
+  auto visibility_get = [&](const WGBindingLayout &layout) {
+    if (is_compute_) {
+      return layout.visibility;
+    }
+    WGPUShaderStage visibility = WGPUShaderStage_None;
+    if (used_bindings_[WSC_STAGE_VERTEX].contains(layout.binding)) {
+      visibility |= WGPUShaderStage_Vertex;
+    }
+    if (used_bindings_[WSC_STAGE_FRAGMENT].contains(layout.binding)) {
+      visibility |= WGPUShaderStage_Fragment;
+    }
+    visibility &= layout.visibility;
+    return visibility;
+  };
+
   Vector<WGBindingLayout> group_entries[2];
   for (const WGResourceBinding &resource : interface_get().resources()) {
-    group_entries[0].append(resource.layout);
+    WGBindingLayout layout = resource.layout;
+    layout.visibility = visibility_get(layout);
+    group_entries[0].append(layout);
     if (ELEM(resource.type,
              WGResourceBinding::Type::Sampler,
              WGResourceBinding::Type::SubpassInput) ||
@@ -1849,7 +1874,7 @@ bool WGShader::finalize(const ShaderCreateInfo *info)
       WGBindingLayout sampler = {};
       sampler.binding = resource.binding;
       sampler.kind = resource.sampler_kind;
-      sampler.visibility = resource.layout.visibility;
+      sampler.visibility = layout.visibility;
       group_entries[1].append(sampler);
     }
   }
