@@ -10,8 +10,13 @@
 
 #include "BLI_math_base.hh"
 #include "BLI_set.hh"
+#include "BLI_fileops.hh"
+#include "BLI_path_utils.hh"
 #include "BLI_string.hh"
 
+#include "MEM_guardedalloc.h"
+
+#include "BKE_appdir.hh"
 #include "BKE_global.hh"
 
 #include "CLG_log.h"
@@ -1666,6 +1671,96 @@ static std::string wg_glsl_define(const std::string &glsl, const char *define)
   return glsl.substr(0, version_end) + "#define " + define + "\n" + glsl.substr(version_end);
 }
 
+/* -------------------------------------------------------------------- */
+/** \name WGSL Cache
+ *
+ * Translating GLSL takes ~25 ms per shader stage (glslang and Tint in WebAssembly), the UI
+ * alone needs ~200. The WGSL is cached in the user's cache directory, which the page keeps in
+ * IndexedDB, keyed by the hash of the GLSL. The first line of a file lists the bindings used
+ * by the entry point, the rest is the WGSL.
+ * \{ */
+
+/** Bump when the translation changes (new compiler or patches), old files are ignored. */
+constexpr int WG_SHADER_CACHE_VERSION = 1;
+
+static std::string wg_shader_cache_path(const std::string &glsl, const int stage)
+{
+  static const bool disabled = BLI_getenv("BLENDER_WEBGPU_NO_SHADER_CACHE") != nullptr;
+  if (disabled) {
+    return "";
+  }
+  char cache_dir[FILE_MAX];
+  BKE_appdir_folder_caches(cache_dir, sizeof(cache_dir));
+  if (cache_dir[0] == '\0') {
+    return "";
+  }
+  const uint64_t hash = wg_hash_bytes(glsl.data(), glsl.size());
+  char name[64];
+  SNPRINTF(name, "wgsl-v%d/%016llx-%d.wgsl", WG_SHADER_CACHE_VERSION, (unsigned long long)hash, stage);
+  char path[FILE_MAX];
+  BLI_path_join(path, sizeof(path), cache_dir, name);
+  return path;
+}
+
+/** Read a cached translation, false when there is none. */
+static bool wg_shader_cache_read(const std::string &path,
+                                 std::string &r_wgsl,
+                                 Vector<WSC_Binding> &r_bindings)
+{
+  if (path.empty() || !BLI_exists(path.c_str())) {
+    return false;
+  }
+  size_t size = 0;
+  char *data = BLI_file_read_text_as_mem(path.c_str(), 1, &size);
+  if (data == nullptr) {
+    return false;
+  }
+  data[size] = '\0';
+  const char *newline = strchr(data, '\n');
+  if (newline == nullptr) {
+    MEM_delete(data);
+    return false;
+  }
+  /* "bindings: group:binding group:binding ..." */
+  std::string header(data, newline - data);
+  if (!header.starts_with("bindings:")) {
+    MEM_delete(data);
+    return false;
+  }
+  std::stringstream ss(header.substr(9));
+  std::string token;
+  while (ss >> token) {
+    WSC_Binding binding = {0, 0};
+    if (sscanf(token.c_str(), "%u:%u", &binding.group, &binding.binding) == 2) {
+      r_bindings.append(binding);
+    }
+  }
+  r_wgsl = newline + 1;
+  MEM_delete(data);
+  return true;
+}
+
+static void wg_shader_cache_write(const std::string &path, const WSC_Result &result)
+{
+  if (path.empty() || result.wgsl == nullptr || result.bindings_len < 0) {
+    return;
+  }
+  BLI_file_ensure_parent_dir_exists(path.c_str());
+  FILE *file = BLI_fopen(path.c_str(), "wb");
+  if (file == nullptr) {
+    return;
+  }
+  fputs("bindings:", file);
+  for (const WSC_Binding &binding : Span(result.bindings, result.bindings_len)) {
+    fprintf(file, " %u:%u", binding.group, binding.binding);
+  }
+  fputs("\n", file);
+  fputs(result.wgsl, file);
+  fclose(file);
+}
+
+/** \} */
+
 /** Translate GLSL to a WGSL module, for variants (errors are only logged). */
 WGObjectID WGShader::module_from_glsl(const std::string &source, const int stage)
 {
@@ -1754,6 +1849,30 @@ void WGShader::build_module(const ShaderCreateInfo &info,
     glsl = run_preprocessor(wg_strip_comments(glsl), G.debug & G_DEBUG_GPU_SHADER_NO_DCE);
   }
 
+  const std::string cache_path = wg_shader_cache_path(glsl, stage);
+  std::string cached_wgsl;
+  Vector<WSC_Binding> cached_bindings;
+  if (wg_shader_cache_read(cache_path, cached_wgsl, cached_bindings)) {
+    for (const WSC_Binding &binding : cached_bindings) {
+      if (binding.group == 0) {
+        used_bindings_[stage].add(binding.binding);
+      }
+    }
+    const StringRef wgsl = cached_wgsl;
+    for (int64_t pos = wgsl.find("@id("); pos != StringRef::not_found;
+         pos = wgsl.find("@id(", pos + 1))
+    {
+      used_constant_ids_.append_non_duplicates(uint32_t(atoi(cached_wgsl.c_str() + pos + 4)));
+    }
+    r_module = wg_object_id_alloc();
+    WGRecord record;
+    record.stream.push(WGCommandType::CreateShaderModule,
+                       wg_labeled(WGCmdCreateShaderModule{r_module}, name),
+                       cached_wgsl.c_str(),
+                       cached_wgsl.size() + 1);
+    return;
+  }
+
   const Vector<WSC_SamplerMapping> sampler_mappings = wg_sampler_mappings(interface_get());
   WSC_Result result = WSC_glsl_to_wgsl(glsl.c_str(),
                                        WSC_Stage(stage),
@@ -1798,6 +1917,7 @@ void WGShader::build_module(const ShaderCreateInfo &info,
       used_bindings_[stage].add(binding.binding);
     }
   }
+  wg_shader_cache_write(cache_path, result);
 
   /* Overrides that are used, pipelines can only set those. */
   const StringRef wgsl = result.wgsl;

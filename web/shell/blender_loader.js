@@ -124,6 +124,9 @@
           FS.writeFile(path, data.subarray(offset, offset + size));
         }
         data = null;
+        /* Python's byte-code cache in the persistent home directory, the scripts themselves are
+         * in memory only and would be compiled again on every visit. */
+        module.ENV.PYTHONPYCACHEPREFIX = HOME + '/.cache/python';
         /* Environment variables for testing, e.g. `?env=BLENDER_WEBGPU_EEVEE=1,BLENDER_DEBUG=1`. */
         for (const entry of params.has('env') ? params.get('env').split(',') : []) {
           const [name, ...value] = entry.split('=');
