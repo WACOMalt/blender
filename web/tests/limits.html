@@ -1,0 +1,34 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>WebGPU limits</title>
+<style>body { font: 14px/1.4 monospace; margin: 16px; white-space: pre-wrap; }</style></head>
+<body>
+<script>
+/* Shows the WebGPU adapter's limits and features (also printed to the console), to compare
+ * with what Blender's shaders need. */
+(async () => {
+  const out = [];
+  if (!navigator.gpu) {
+    out.push('WebGPU is not available in this browser.');
+  }
+  else {
+    const adapter = await navigator.gpu.requestAdapter();
+    if (!adapter) {
+      out.push('No WebGPU adapter.');
+    }
+    else {
+      const info = adapter.info || {};
+      out.push(`ADAPTER ${info.vendor} / ${info.architecture} / ${info.device} / ${info.description}`);
+      const l = adapter.limits, limits = {};
+      for (const k of Object.getOwnPropertyNames(Object.getPrototypeOf(l))) {
+        if (k !== 'constructor') limits[k] = l[k];
+      }
+      out.push('LIMITS ' + JSON.stringify(limits, null, 1));
+      out.push('FEATURES ' + [...adapter.features].join(', '));
+      out.push('WGSL ' + [...navigator.gpu.wgslLanguageFeatures].join(', '));
+    }
+  }
+  out.push(`USER AGENT ${navigator.userAgent}`);
+  for (const line of out) console.log(line);
+  document.body.textContent = out.join('\n\n');
+})();
+</script></body></html>

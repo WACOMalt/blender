@@ -13,6 +13,8 @@
 #include <emscripten/proxying.h>
 #include <emscripten/threading.h>
 
+#include "BKE_global.hh"
+
 #include "BLI_assert.hh"
 #include "BLI_vector.hh"
 
@@ -134,6 +136,35 @@ void WGDevice::on_adapter(WGPUAdapter adapter, void *ctx)
   info_.rg11b10ufloat_renderable = request_feature(WGPUFeatureName_RG11B10UfloatRenderable);
   request_feature(WGPUFeatureName_TextureCompressionBC);
   request_feature(WGPUFeatureName_IndirectFirstInstance);
+
+  if (G.debug & G_DEBUG_GPU) {
+    /* The limits that decide which shaders (EEVEE in particular) can run. */
+    printf("WebGPU adapter: %s / %s / %s\n",
+           info_.adapter_vendor.c_str(),
+           info_.adapter_architecture.c_str(),
+           info_.adapter_description.c_str());
+    printf("WebGPU limits: storage buffers/stage %u, storage textures/stage %u, "
+           "sampled textures/stage %u, samplers/stage %u, uniform buffers/stage %u, "
+           "bind groups %u, workgroup invocations %u, workgroup storage %u, "
+           "buffer size %llu, texture 2D %u, color attachment bytes/sample %u\n",
+           limits.maxStorageBuffersPerShaderStage,
+           limits.maxStorageTexturesPerShaderStage,
+           limits.maxSampledTexturesPerShaderStage,
+           limits.maxSamplersPerShaderStage,
+           limits.maxUniformBuffersPerShaderStage,
+           limits.maxBindGroups,
+           limits.maxComputeInvocationsPerWorkgroup,
+           limits.maxComputeWorkgroupStorageSize,
+           (unsigned long long)limits.maxBufferSize,
+           limits.maxTextureDimension2D,
+           limits.maxColorAttachmentBytesPerSample);
+    printf("WebGPU features: float32-filterable %d, depth32float-stencil8 %d, "
+           "dual-source-blending %d, rg11b10ufloat-renderable %d\n",
+           int(info_.float32_filterable),
+           int(info_.depth32float_stencil8),
+           int(info_.dual_source_blending),
+           int(info_.rg11b10ufloat_renderable));
+  }
 
   WGPUDeviceDescriptor desc = {};
   desc.label = wg_string("Blender");
