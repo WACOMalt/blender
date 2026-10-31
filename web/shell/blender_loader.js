@@ -118,6 +118,8 @@
     preRun: [
       instance => {
         module = instance;
+        /* For debugging from the console (e.g. `blender.FS`). */
+        window.blender = module;
         const FS = module.FS;
         for (const [path, offset, size] of index.files) {
           FS.mkdirTree(path.substring(0, path.lastIndexOf('/')));
