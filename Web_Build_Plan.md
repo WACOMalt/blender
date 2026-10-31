@@ -112,10 +112,11 @@ Decisions by the repo owner (2026-10-28):
   pipeline whose creation failed is skipped (an error scope captures the failure, binding an
   invalid pipeline would invalidate the whole command buffer).
 - EEVEE (in progress, `?env=BLENDER_WEBGPU_EEVEE=1` on the page enables it): all of its
-  shaders translate and compile on WebGPU now, and its frames are submitted. Material Preview and Rendered shading still use
+  shaders translate and compile on WebGPU now, and the viewport renders (geometry, world,
+  overlays). In the headless test environment the surfaces stay unlit, see below. Material Preview and Rendered shading still use
   Workbench by default (and F12 renders with EEVEE report an error) until EEVEE is verified on
   real GPUs: the headless test environment (SwiftShader) only has WebGPU's default limits, which
-  EEVEE exceeds (`maxComputeInvocationsPerWorkgroup` 256 < 1024 for several compute shaders,
+  the lighting pipelines of EEVEE exceed (`maxComputeInvocationsPerWorkgroup` 256 < 1024 for several compute shaders,
   `maxStorageBuffersPerShaderStage` 10 < 12 for the deferred light fragment shaders, 16 sampled
   textures for the film shaders). Desktop GPUs report higher limits. Shader changes needed for
   WGSL: no `switch` fall-through, barriers in uniform control flow (the light iterator, light
