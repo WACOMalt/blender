@@ -106,11 +106,16 @@ Decisions by the repo owner (2026-10-28):
   others are emulated with a storage buffer holding the texels in the texture's bit layout,
   synchronized with the texture by compute/render passes when the texture is used (the same idea
   as Metal's buffer-backed atomic textures). See `wg_shader.hh`.
-- EEVEE (in progress, `BLENDER_WEBGPU_EEVEE=1` enables it): Material Preview and Rendered
-  shading use Workbench and F12 renders with EEVEE report an error on WebGPU until its shaders
-  all work. Shader changes needed for WGSL: no `switch` fall-through, barriers in uniform
-  control flow (the EEVEE shadow shaders were restructured). Without the dual source blending
-  feature the second output is dropped (approximate blending). Cycles works.
+- EEVEE (in progress, `?env=BLENDER_WEBGPU_EEVEE=1` on the page enables it): all of its
+  shaders translate and compile on WebGPU now. Material Preview and Rendered shading still use
+  Workbench by default (and F12 renders with EEVEE report an error) until EEVEE is verified on
+  real GPUs: the headless test environment (SwiftShader) only has WebGPU's default limits, which
+  EEVEE exceeds (`maxComputeInvocationsPerWorkgroup` 256 < 1024 for several compute shaders,
+  `maxStorageBuffersPerShaderStage` 10 < 12 for the deferred light fragment shaders, 16 sampled
+  textures for the film shaders). Desktop GPUs report higher limits. Shader changes needed for
+  WGSL: no `switch` fall-through, barriers in uniform control flow (the light iterator, light
+  culling and shadow shaders were restructured). Without the dual source blending feature the
+  second output is dropped (approximate blending). Cycles works.
 - Not supported yet: geometry shaders, layered rendering, barycentric coordinates,
   1D array textures, wide points in indirect draws, triangle fans in batches.
 - Testing caveat: headless Chromium renders with SwiftShader, which drops lines that cross the

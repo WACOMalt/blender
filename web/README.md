@@ -45,8 +45,10 @@ Test scripts in `web/tests/` are copied into the bundle, the page runs one with
 What works: the full UI with WebGPU (`source/blender/gpu/webgpu/`), Workbench and the
 overlays, Edit mode, loading and saving `.blend` files (kept in IndexedDB, or by drag and
 drop and the Files panel), Python and `bpy`, Cycles on the CPU (all threads, also in the
-viewport), image formats of OpenImageIO. EEVEE is not available yet (its shaders can not be
-translated to WGSL), Material Preview falls back to Workbench.
+viewport), image formats of OpenImageIO. EEVEE is experimental: its shaders compile on WebGPU
+but it is not verified on real GPUs yet, so Material Preview falls back to Workbench unless the
+page is opened with `?env=BLENDER_WEBGPU_EEVEE=1` (needs a GPU with higher than default WebGPU
+limits, see `Web_Build_Plan.md`).
 
 Headless Chromium draws with SwiftShader, which drops lines crossing the camera plane
 (`web/tests/lineclip.html`); screenshots miss the near part of the grid because of it.
