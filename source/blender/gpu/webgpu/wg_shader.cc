@@ -1906,6 +1906,14 @@ bool WGShader::finalize(const ShaderCreateInfo *info)
     }
     WGBindingLayout layout = resource.layout;
     layout.visibility = visibility_get(layout);
+    /* Binding a buffer as read-only and writable storage in one draw is a usage conflict in
+     * WebGPU (EEVEE binds buffers to several slots). Read-only entries become read-write where
+     * allowed (not in the vertex stage), which read-only shader variables accept. */
+    if (layout.kind == WGBindingLayout::Kind::ReadOnlyStorageBuffer &&
+        !(layout.visibility & WGPUShaderStage_Vertex))
+    {
+      layout.kind = WGBindingLayout::Kind::StorageBuffer;
+    }
     group_entries[0].append(layout);
     if (ELEM(resource.type,
              WGResourceBinding::Type::Sampler,
