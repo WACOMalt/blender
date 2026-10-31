@@ -1232,7 +1232,10 @@ std::string WGShader::fragment_interface_declare(const ShaderCreateInfo &info) c
     ss << "layout(location = " << output.index;
     switch (output.blend) {
       case DualBlend::SRC_0:
-        ss << ", index = 0";
+        /* Without the feature there is a single source, declared without index. */
+        if (dual_source_blending) {
+          ss << ", index = 0";
+        }
         break;
       case DualBlend::SRC_1:
         ss << ", index = 1";

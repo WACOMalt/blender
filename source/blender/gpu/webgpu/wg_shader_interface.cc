@@ -418,15 +418,26 @@ void WGShaderInterface::populate_resources(const ShaderCreateInfo &info)
   const WGPUShaderStage writable_stages = is_compute ? WGPUShaderStage_Compute :
                                                        WGPUShaderStage_Fragment;
 
+  /* Resources count against the per-stage limits, the vertex stage only sees the ones it uses
+   * (read-only, writable storage isn't allowed there). */
+  auto stages_for = [&](const StringRef name) {
+    if (is_compute) {
+      return WGPUShaderStage(WGPUShaderStage_Compute);
+    }
+    return WGPUShaderStage(vertex_uses(name) ? WGPUShaderStage_Vertex | WGPUShaderStage_Fragment :
+                                               WGPUShaderStage_Fragment);
+  };
+
   uint32_t binding = 0;
-  auto add_texture = [&](WGResourceBinding::Type type, int slot, ImageType image_type) {
+  auto add_texture =
+      [&](WGResourceBinding::Type type, int slot, ImageType image_type, const StringRef name) {
     WGResourceBinding resource = {};
     resource.type = type;
     resource.slot = slot;
     resource.binding = binding++;
     resource.layout.binding = resource.binding;
     resource.layout.kind = WGBindingLayout::Kind::Texture;
-    resource.layout.visibility = all_stages;
+    resource.layout.visibility = stages_for(name);
     resource.layout.sample_type = wg_sample_type(image_type);
     resource.layout.view_dimension = wg_view_dimension(image_type);
     resource.sampler_kind = wg_sampler_kind(resource.layout.sample_type);
@@ -450,7 +461,7 @@ void WGShaderInterface::populate_resources(const ShaderCreateInfo &info)
     resource.layout.binding = resource.binding;
     resource.layout.kind = is_writable ? WGBindingLayout::Kind::StorageBuffer :
                                          WGBindingLayout::Kind::ReadOnlyStorageBuffer;
-    resource.layout.visibility = is_writable ? writable_stages : all_stages;
+    resource.layout.visibility = is_writable ? writable_stages : stages_for(name);
     resource.layout.view_dimension = wg_view_dimension(image_type);
     resources_.append(resource);
     has_buffer_images_ = true;
@@ -466,7 +477,7 @@ void WGShaderInterface::populate_resources(const ShaderCreateInfo &info)
   };
 
   for (const ShaderCreateInfo::SubpassIn &subpass_in : info.subpass_inputs_) {
-    add_texture(WGResourceBinding::Type::SubpassInput, subpass_in.index, subpass_in.img_type);
+    add_texture(WGResourceBinding::Type::SubpassInput, subpass_in.index, subpass_in.img_type, "");
   }
   for (const Resource &res : all_resources_get(info)) {
     switch (res.bind_type) {
@@ -484,7 +495,7 @@ void WGShaderInterface::populate_resources(const ShaderCreateInfo &info)
                            res.sampler.name);
           break;
         }
-        add_texture(WGResourceBinding::Type::Sampler, res.slot, res.sampler.type);
+        add_texture(WGResourceBinding::Type::Sampler, res.slot, res.sampler.type, res.sampler.name);
         break;
       case Resource::BindType::IMAGE: {
         const WGImageMode mode = image_mode_get(res);
@@ -504,7 +515,7 @@ void WGShaderInterface::populate_resources(const ShaderCreateInfo &info)
           break;
         }
         if (mode == WGImageMode::Sampled) {
-          add_texture(WGResourceBinding::Type::Image, res.slot, res.image.type);
+          add_texture(WGResourceBinding::Type::Image, res.slot, res.image.type, res.image.name);
           resources_.last().image_as_texture = true;
           break;
         }
@@ -517,7 +528,7 @@ void WGShaderInterface::populate_resources(const ShaderCreateInfo &info)
         resource.layout.storage_access = wg_storage_access(res.image.qualifiers);
         resource.layout.visibility = resource.layout.storage_access ==
                                              WGPUStorageTextureAccess_ReadOnly ?
-                                         all_stages :
+                                         stages_for(res.image.name) :
                                          writable_stages;
         resource.layout.view_dimension = wg_view_dimension(res.image.type);
         resource.layout.storage_format = wg_texture_format(TextureFormat(res.image.format));
@@ -542,7 +553,7 @@ void WGShaderInterface::populate_resources(const ShaderCreateInfo &info)
         resource.binding = binding++;
         resource.layout.binding = resource.binding;
         resource.layout.kind = WGBindingLayout::Kind::UniformBuffer;
-        resource.layout.visibility = all_stages;
+        resource.layout.visibility = stages_for(res.uniformbuf.name.str_no_array());
         resources_.append(resource);
         break;
       }
@@ -555,7 +566,9 @@ void WGShaderInterface::populate_resources(const ShaderCreateInfo &info)
         resource.layout.binding = resource.binding;
         resource.layout.kind = is_writable ? WGBindingLayout::Kind::StorageBuffer :
                                              WGBindingLayout::Kind::ReadOnlyStorageBuffer;
-        resource.layout.visibility = is_writable ? writable_stages : all_stages;
+        resource.layout.visibility = is_writable ?
+                                         writable_stages :
+                                         stages_for(res.storagebuf.name.str_no_array());
         resources_.append(resource);
         if (is_writable && vertex_uses(res.storagebuf.name.str_no_array())) {
           /* Read-only alias for the vertex stage. */
