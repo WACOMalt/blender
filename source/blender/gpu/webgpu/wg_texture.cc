@@ -430,10 +430,13 @@ void WGTexture::clear(double4 data)
   const bool is_finite = std::isfinite(data[0]) && std::isfinite(data[1]) &&
                          std::isfinite(data[2]) && std::isfinite(data[3]);
   if (wg_texture_format_is_renderable(device_format_) &&
-      !ELEM(type_, GPU_TEXTURE_1D, GPU_TEXTURE_3D, GPU_TEXTURE_BUFFER) &&
-      (is_finite || (format_flag_ & GPU_FORMAT_DEPTH)))
+      !ELEM(type_, GPU_TEXTURE_1D, GPU_TEXTURE_3D, GPU_TEXTURE_BUFFER))
   {
     const bool is_depth = (format_flag_ & GPU_FORMAT_DEPTH) != 0;
+    /* The browser rejects non-finite clear values, those are drawn (as bits). */
+    const bool clear_by_draw = !is_depth && !is_finite;
+    const bool is_integer = format_flag_ & GPU_FORMAT_INTEGER;
+    const bool is_signed = format_flag_ & GPU_FORMAT_SIGNED;
     const int layers = (type_ & (GPU_TEXTURE_ARRAY | GPU_TEXTURE_CUBE)) ? layer_count() : 1;
     WGRecord record;
     for (int mip = 0; mip < max_ii(mipmaps_, 1); mip++) {
@@ -445,7 +448,7 @@ void WGTexture::clear(double4 data)
         attachment.view_format = wg_format_;
         attachment.mip = uint32_t(view_mip_start_ + mip);
         attachment.layer = uint32_t(view_layer_start_ + layer);
-        attachment.load_op = WGPULoadOp_Clear;
+        attachment.load_op = clear_by_draw ? WGPULoadOp_Load : WGPULoadOp_Clear;
         attachment.store_op = WGPUStoreOp_Store;
         if (is_depth) {
           cmd.clear_depth = float(data[0]);
@@ -457,10 +460,30 @@ void WGTexture::clear(double4 data)
         else {
           cmd.color_len = 1;
           for (int i = 0; i < 4; i++) {
-            attachment.clear_color[i] = data[i];
+            attachment.clear_color[i] = clear_by_draw ? 0.0 : data[i];
           }
         }
         record.stream.push(WGCommandType::BeginRenderPass, cmd);
+        if (clear_by_draw) {
+          uint32_t clear_data[WG_CLEAR_DATA_SIZE / 4] = {};
+          for (int i = 0; i < 4; i++) {
+            if (!is_integer) {
+              const float value = float(data[i]);
+              memcpy(&clear_data[i], &value, sizeof(float));
+            }
+            else {
+              clear_data[i] = is_signed ? uint32_t(int32_t(data[i])) : uint32_t(data[i]);
+            }
+          }
+          WGCmdClearAttachments clear = {};
+          clear.pass_id = cmd.pass_id;
+          clear.color_mask = 1;
+          const int3 size = mip_size_get(mip);
+          clear.scissor[2] = uint32_t(max_ii(size.x, 1));
+          clear.scissor[3] = uint32_t(max_ii(size.y, 1));
+          clear.data_offset = record.stream.staging_push(clear_data, sizeof(clear_data));
+          record.stream.push(WGCommandType::ClearAttachments, clear);
+        }
         record.stream.push(WGCommandType::EndRenderPass, WGCmdEndRenderPass{cmd.pass_id});
       }
     }

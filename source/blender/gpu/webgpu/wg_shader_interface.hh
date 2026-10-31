@@ -96,6 +96,8 @@ class WGShaderInterface : public ShaderInterface {
   WGPushConstantsLayout push_constants_layout_;
   shader::BuiltinBits shader_builtins_;
   bool has_buffer_images_ = false;
+  /** Slots of images forced to #WGImageMode::Buffer (see #image_mode_get). */
+  Vector<int> buffer_mode_slots_;
 
  public:
   void init(const shader::ShaderCreateInfo &info);
@@ -105,7 +107,13 @@ class WGShaderInterface : public ShaderInterface {
     return resources_;
   }
   /** Binding of a resource in the WGSL shader. */
+  /** Mode of an image from its declaration alone. */
   static WGImageMode image_mode(const shader::ShaderCreateInfo::Resource &resource);
+  /**
+   * Mode of an image in this shader: storage textures past the device limit are emulated with
+   * buffers too.
+   */
+  WGImageMode image_mode_get(const shader::ShaderCreateInfo::Resource &resource) const;
   bool has_buffer_images() const
   {
     return has_buffer_images_;

@@ -10,6 +10,9 @@
 
 #include "vulkan/vk_memory_layout.hh"
 
+#include "gpu_shader_dependency_private.hh"
+
+#include "wg_backend.hh"
 #include "wg_common.hh"
 #include "wg_shader_interface.hh"
 
@@ -345,10 +348,69 @@ WGImageMode WGShaderInterface::image_mode(const Resource &res)
   return WGImageMode::Native;
 }
 
+WGImageMode WGShaderInterface::image_mode_get(const Resource &res) const
+{
+  if (res.bind_type == Resource::BindType::IMAGE && buffer_mode_slots_.contains(res.slot)) {
+    return WGImageMode::Buffer;
+  }
+  return image_mode(res);
+}
+
+/** True when an identifier is used by one of the sources. */
+static bool wg_sources_use(Span<StringRefNull> sources, const StringRef name)
+{
+  auto is_identifier_char = [](const char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+           c == '_';
+  };
+  for (const StringRefNull source : sources) {
+    for (int64_t pos = source.find(name); pos != StringRef::not_found;
+         pos = source.find(name, pos + 1))
+    {
+      const bool start_ok = pos == 0 || !is_identifier_char(source[pos - 1]);
+      const bool end_ok = pos + name.size() >= source.size() ||
+                          !is_identifier_char(source[pos + name.size()]);
+      if (start_ok && end_ok) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 void WGShaderInterface::populate_resources(const ShaderCreateInfo &info)
 {
   const bool is_compute = !info.compute_source_.is_empty() ||
                           !info.compute_source_generated.empty();
+
+  /* Storage textures past the device limit are emulated with buffers (e.g. the HiZ update
+   * writes 7 mip levels, the default WebGPU limit is 4). */
+  {
+    const uint32_t limit = WGBackend::get().device.info().limits.maxStorageTexturesPerShaderStage;
+    uint32_t storage_textures = 0;
+    for (const Resource &res : all_resources_get(info)) {
+      if (res.bind_type != Resource::BindType::IMAGE || image_mode(res) != WGImageMode::Native) {
+        continue;
+      }
+      WGTexelLayout layout;
+      if (++storage_textures > limit &&
+          wg_texel_layout_get(wg_device_format(TextureFormat(res.image.format)), layout))
+      {
+        buffer_mode_slots_.append(res.slot);
+      }
+    }
+  }
+
+  /* Writable resources get a read-only alias binding for the vertex stage when it uses them,
+   * so the aliases don't count against the vertex stage limits otherwise. */
+  Vector<StringRefNull> vertex_sources;
+  if (!is_compute && !info.vertex_source_.is_empty()) {
+    vertex_sources = gpu_shader_dependency_get_resolved_source(
+        info.vertex_source_, info.generated_sources, info.name_);
+  }
+  auto vertex_uses = [&](const StringRef name) {
+    return !is_compute && wg_sources_use(vertex_sources, name);
+  };
   const WGPUShaderStage all_stages = is_compute ? WGPUShaderStage_Compute :
                                                   WGPUShaderStage_Vertex |
                                                       WGPUShaderStage_Fragment;
@@ -376,7 +438,8 @@ void WGShaderInterface::populate_resources(const ShaderCreateInfo &info)
                               const bool sampler_slot,
                               const ImageType image_type,
                               const Qualifier qualifiers,
-                              const TextureFormat image_format) {
+                              const TextureFormat image_format,
+                              const StringRef name) {
     const bool is_writable = flag_is_set(qualifiers, Qualifier::write);
     WGResourceBinding resource = {};
     resource.type = WGResourceBinding::Type::BufferImage;
@@ -391,7 +454,7 @@ void WGShaderInterface::populate_resources(const ShaderCreateInfo &info)
     resource.layout.view_dimension = wg_view_dimension(image_type);
     resources_.append(resource);
     has_buffer_images_ = true;
-    if (is_writable && !is_compute) {
+    if (is_writable && vertex_uses(name)) {
       /* Read-only alias for the vertex stage. */
       resource.binding = binding++;
       resource.layout.binding = resource.binding;
@@ -417,13 +480,14 @@ void WGShaderInterface::populate_resources(const ShaderCreateInfo &info)
                            true,
                            res.sampler.type,
                            Qualifier::read,
-                           is_signed ? TextureFormat::SINT_32 : TextureFormat::UINT_32);
+                           is_signed ? TextureFormat::SINT_32 : TextureFormat::UINT_32,
+                           res.sampler.name);
           break;
         }
         add_texture(WGResourceBinding::Type::Sampler, res.slot, res.sampler.type);
         break;
       case Resource::BindType::IMAGE: {
-        const WGImageMode mode = image_mode(res);
+        const WGImageMode mode = image_mode_get(res);
         if (mode == WGImageMode::Buffer) {
           const bool is_atomic = wg_is_atomic_image_type(res.image.type);
           const bool is_signed = ELEM(res.image.type,
@@ -435,7 +499,8 @@ void WGShaderInterface::populate_resources(const ShaderCreateInfo &info)
                            res.image.type,
                            res.image.qualifiers,
                            is_atomic ? (is_signed ? TextureFormat::SINT_32 : TextureFormat::UINT_32) :
-                                       wg_device_format(TextureFormat(res.image.format)));
+                                       wg_device_format(TextureFormat(res.image.format)),
+                           res.image.name);
           break;
         }
         if (mode == WGImageMode::Sampled) {
@@ -457,7 +522,9 @@ void WGShaderInterface::populate_resources(const ShaderCreateInfo &info)
         resource.layout.view_dimension = wg_view_dimension(res.image.type);
         resource.layout.storage_format = wg_texture_format(TextureFormat(res.image.format));
         resources_.append(resource);
-        if (!is_compute && resource.layout.storage_access != WGPUStorageTextureAccess_ReadOnly) {
+        if (resource.layout.storage_access != WGPUStorageTextureAccess_ReadOnly &&
+            vertex_uses(res.image.name))
+        {
           /* Read-only alias for the vertex stage. */
           resource.binding = binding++;
           resource.layout.binding = resource.binding;
@@ -490,7 +557,7 @@ void WGShaderInterface::populate_resources(const ShaderCreateInfo &info)
                                              WGBindingLayout::Kind::ReadOnlyStorageBuffer;
         resource.layout.visibility = is_writable ? writable_stages : all_stages;
         resources_.append(resource);
-        if (is_writable && !is_compute) {
+        if (is_writable && vertex_uses(res.storagebuf.name.str_no_array())) {
           /* Read-only alias for the vertex stage. */
           resource.binding = binding++;
           resource.layout.binding = resource.binding;
@@ -587,7 +654,7 @@ uint32_t WGShaderInterface::binding_get(const Resource &resource) const
   }
   const bool sampler_slot = resource.bind_type == Resource::BindType::SAMPLER;
   if (ELEM(resource.bind_type, Resource::BindType::IMAGE, Resource::BindType::SAMPLER) &&
-      image_mode(resource) == WGImageMode::Buffer)
+      image_mode_get(resource) == WGImageMode::Buffer)
   {
     for (const WGResourceBinding &binding : resources_) {
       if (binding.type == WGResourceBinding::Type::BufferImage && !binding.vertex_alias &&
@@ -612,11 +679,11 @@ int WGShaderInterface::vertex_alias_binding_get(const Resource &resource) const
     case Resource::BindType::STORAGE_BUFFER:
       break;
     case Resource::BindType::IMAGE:
-      type = image_mode(resource) == WGImageMode::Buffer ? WGResourceBinding::Type::BufferImage :
+      type = image_mode_get(resource) == WGImageMode::Buffer ? WGResourceBinding::Type::BufferImage :
                                                            WGResourceBinding::Type::Image;
       break;
     case Resource::BindType::SAMPLER:
-      if (image_mode(resource) != WGImageMode::Buffer) {
+      if (image_mode_get(resource) != WGImageMode::Buffer) {
         return -1;
       }
       type = WGResourceBinding::Type::BufferImage;

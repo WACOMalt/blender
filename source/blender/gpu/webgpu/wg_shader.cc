@@ -690,17 +690,14 @@ static void wg_rewrite_image_calls(std::string &glsl,
 static void print_resource(std::ostream &os,
                            const uint32_t binding,
                            const int vertex_alias_binding,
+                           const WGImageMode image_mode,
                            const ShaderCreateInfo::Resource &res)
 {
   /* Resources with a vertex stage alias take their binding and qualifier from the macros
    * defined by #WGShader::resources_declare. */
   const bool use_macros = vertex_alias_binding >= 0;
   const std::string name = resource_name(res);
-  if (ELEM(res.bind_type,
-           ShaderCreateInfo::Resource::BindType::IMAGE,
-           ShaderCreateInfo::Resource::BindType::SAMPLER) &&
-      WGShaderInterface::image_mode(res) != WGImageMode::Native)
-  {
+  if (image_mode != WGImageMode::Native) {
     /* Declared with their helpers after the macros, see #print_emulated_image. */
     return;
   }
@@ -767,8 +764,11 @@ static void print_resource(std::ostream &os,
   if (assign_if_different(active_info_name, res.info_name)) {
     os << "\n#define CREATE_INFO_RES_" << res_frequency << "_" << res.info_name << " \\\n";
   }
-  print_resource(
-      os, shader_interface.binding_get(res), shader_interface.vertex_alias_binding_get(res), res);
+  print_resource(os,
+                 shader_interface.binding_get(res),
+                 shader_interface.vertex_alias_binding_get(res),
+                 shader_interface.image_mode_get(res),
+                 res);
   os << " \\\n";
 }
 
@@ -787,7 +787,7 @@ static void print_emulated_image(std::ostream &os,
   {
     return;
   }
-  const WGImageMode mode = WGShaderInterface::image_mode(res);
+  const WGImageMode mode = shader_interface.image_mode_get(res);
   const uint32_t binding = shader_interface.binding_get(res);
   if (mode == WGImageMode::Buffer) {
     const bool is_sampler = res.bind_type == ShaderCreateInfo::Resource::BindType::SAMPLER;
@@ -834,7 +834,7 @@ static void print_vertex_alias_macros(std::ostream &os,
   }
   std::stringstream qualifier;
   if (res.bind_type == ShaderCreateInfo::Resource::BindType::IMAGE) {
-    if (WGShaderInterface::image_mode(res) == WGImageMode::Buffer) {
+    if (shader_interface.image_mode_get(res) == WGImageMode::Buffer) {
       /* The buffer is read by the helpers even for write-only images. */
       qualifier << (flag_is_set(res.image.qualifiers, Qualifier::write) ? "" : "readonly");
     }
@@ -1050,7 +1050,7 @@ std::string WGShader::resources_declare(const ShaderCreateInfo &info) const
               ELEM(res.bind_type,
                    ShaderCreateInfo::Resource::BindType::IMAGE,
                    ShaderCreateInfo::Resource::BindType::SAMPLER) &&
-              WGShaderInterface::image_mode(res) == WGImageMode::Buffer)
+              wg_interface.image_mode_get(res) == WGImageMode::Buffer)
           {
             ss << "  uvec4 " << resource_name(res) << "_wg_meta;\n";
           }
@@ -1205,7 +1205,8 @@ std::string WGShader::fragment_interface_declare(const ShaderCreateInfo &info) c
     Resource res(info, Resource::BindType::SAMPLER, input.index, nullptr);
     res.sampler.type = input.img_type;
     res.sampler.name = image_name;
-    print_resource(ss, wg_interface.subpass_input_binding_get(input.index), -1, res);
+    print_resource(
+        ss, wg_interface.subpass_input_binding_get(input.index), -1, WGImageMode::Native, res);
     ss << "\n";
 
     char swizzle[] = "xyzw";
@@ -1462,7 +1463,9 @@ static bool wg_is_integer_image_type(const ImageType type)
 }
 
 /** Source changes for constructs WGSL or Tint don't support. */
-static void wg_glsl_workarounds(const ShaderCreateInfo &info, std::string &glsl)
+static void wg_glsl_workarounds(const ShaderCreateInfo &info,
+                                const WGShaderInterface &interface,
+                                std::string &glsl)
 {
   /* Emulated images (see #WGImageMode): their image functions become the helpers. */
   Set<std::string> emulated_images, emulated_samplers;
@@ -1473,12 +1476,12 @@ static void wg_glsl_workarounds(const ShaderCreateInfo &info, std::string &glsl)
   {
     for (const ShaderCreateInfo::Resource &res : resources) {
       if (res.bind_type == ShaderCreateInfo::Resource::BindType::IMAGE &&
-          WGShaderInterface::image_mode(res) != WGImageMode::Native)
+          interface.image_mode_get(res) != WGImageMode::Native)
       {
         emulated_images.add(res.image.name);
       }
       else if (res.bind_type == ShaderCreateInfo::Resource::BindType::SAMPLER &&
-               WGShaderInterface::image_mode(res) == WGImageMode::Buffer)
+               interface.image_mode_get(res) == WGImageMode::Buffer)
       {
         emulated_samplers.add(res.sampler.name);
       }
@@ -1723,7 +1726,7 @@ void WGShader::build_module(const ShaderCreateInfo &info,
   }
   sources[SOURCES_INDEX_VERSION] = patch;
   std::string glsl = fmt::to_string(fmt::join(sources, ""));
-  wg_glsl_workarounds(info, glsl);
+  wg_glsl_workarounds(info, interface_get(), glsl);
 
   if (stage == WSC_STAGE_VERTEX && uses_point_size) {
     for (const ShaderCreateInfo::VertIn &attr : info.vertex_inputs_) {
