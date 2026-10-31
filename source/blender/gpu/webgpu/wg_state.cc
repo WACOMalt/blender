@@ -38,6 +38,11 @@ void WGStateManager::texture_unbind_all()
 
 void WGStateManager::image_bind(Texture *tex, int unit)
 {
+  /* Images bound by name get the binding of the shader input, which is offset (see
+   * #WGShaderInterface::populate_inputs). */
+  if (unit >= WG_IMAGE_BINDING_OFFSET) {
+    unit -= WG_IMAGE_BINDING_OFFSET;
+  }
   if (unit < 0 || unit >= WG_MAX_IMAGE_UNITS) {
     return;
   }
