@@ -16,6 +16,7 @@
 #include <cmath>
 
 #include <emscripten/emscripten.h>
+#include <emscripten/html5.h>
 
 GHOST_WindowEmscripten::GHOST_WindowEmscripten(GHOST_SystemEmscripten *system,
                                                const char *title,
@@ -240,8 +241,26 @@ GHOST_TSuccess GHOST_WindowEmscripten::setWindowCursorVisibility(bool visible)
   return GHOST_kSuccess;
 }
 
-GHOST_TSuccess GHOST_WindowEmscripten::setWindowCursorGrab(GHOST_TGrabCursorMode /*mode*/)
+GHOST_TSuccess GHOST_WindowEmscripten::setWindowCursorGrab(GHOST_TGrabCursorMode mode)
 {
-  /* TODO: continuous grab with the Pointer Lock API (needs a user gesture to start). */
+  /* Continuous grabs use the Pointer Lock API: the browser hides the cursor and reports
+   * relative motion, the system accumulates it (see #GHOST_SystemEmscripten::processWebEvent).
+   * Blender draws a software cursor for the modes that show one, as the warp capability is
+   * not available. Locking needs a recent user gesture, which the press starting the grab is;
+   * otherwise the request is deferred to the next input event. */
+  switch (mode) {
+    case GHOST_kGrabWrap:
+    case GHOST_kGrabHide:
+      system_->setPointerLockWanted(true);
+      emscripten_request_pointerlock("#canvas", true);
+      break;
+    case GHOST_kGrabNormal:
+      /* Confining the cursor to the window is not possible in a browser. */
+      break;
+    case GHOST_kGrabDisable:
+      system_->setPointerLockWanted(false);
+      emscripten_exit_pointerlock();
+      break;
+  }
   return GHOST_kSuccess;
 }

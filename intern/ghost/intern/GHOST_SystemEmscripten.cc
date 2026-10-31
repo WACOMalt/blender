@@ -48,6 +48,8 @@ static void web_event_mouse_fill(GHOST_WebEvent &event, const EmscriptenMouseEve
   event.time_ms = web_event_time_ms();
   event.x = int32_t(std::lround(mouse_event->clientX * ratio));
   event.y = int32_t(std::lround(mouse_event->clientY * ratio));
+  event.dx = int32_t(std::lround(mouse_event->movementX * ratio));
+  event.dy = int32_t(std::lround(mouse_event->movementY * ratio));
   event.button = mouse_event->button;
   event.shift = mouse_event->shiftKey;
   event.ctrl = mouse_event->ctrlKey;
@@ -72,7 +74,13 @@ static bool web_on_mouse(int event_type, const EmscriptenMouseEvent *mouse_event
       return false;
   }
   web_event_mouse_fill(event, mouse_event);
-  static_cast<GHOST_SystemEmscripten *>(user_data)->queueWebEvent(event);
+  GHOST_SystemEmscripten *system = static_cast<GHOST_SystemEmscripten *>(user_data);
+  system->queueWebEvent(event);
+  if (event_type != EMSCRIPTEN_EVENT_MOUSEUP && system->pointerLockRetryNeeded()) {
+    /* The request from Blender's thread failed (browsers refuse one shortly after a lock
+     * ended), inside an input event handler it is allowed. */
+    emscripten_request_pointerlock(CANVAS_TARGET, false);
+  }
   /* Prevent text selection and other default actions on the canvas. */
   return event_type != EMSCRIPTEN_EVENT_MOUSEMOVE;
 }
@@ -158,6 +166,24 @@ static bool web_on_focus(int event_type, const EmscriptenFocusEvent * /*focus_ev
   return false;
 }
 
+static bool web_on_pointerlockchange(int /*event_type*/,
+                                     const EmscriptenPointerlockChangeEvent *lock_event,
+                                     void *user_data)
+{
+  GHOST_WebEvent event = {};
+  event.type = GHOST_WebEvent::Type::PointerLock;
+  event.time_ms = web_event_time_ms();
+  event.locked = lock_event->isActive;
+  static_cast<GHOST_SystemEmscripten *>(user_data)->queueWebEvent(event);
+  return false;
+}
+
+static bool web_on_pointerlockerror(int /*event_type*/, const void * /*reserved*/, void *user_data)
+{
+  static_cast<GHOST_SystemEmscripten *>(user_data)->onPointerLockError();
+  return false;
+}
+
 static void web_register_callbacks(void *user_data)
 {
   const pthread_t thread = EM_CALLBACK_THREAD_CONTEXT_MAIN_RUNTIME_THREAD;
@@ -174,6 +200,10 @@ static void web_register_callbacks(void *user_data)
   emscripten_set_resize_callback_on_thread(window, user_data, true, web_on_resize, thread);
   emscripten_set_focus_callback_on_thread(window, user_data, true, web_on_focus, thread);
   emscripten_set_blur_callback_on_thread(window, user_data, true, web_on_focus, thread);
+  emscripten_set_pointerlockchange_callback_on_thread(
+      EMSCRIPTEN_EVENT_TARGET_DOCUMENT, user_data, true, web_on_pointerlockchange, thread);
+  emscripten_set_pointerlockerror_callback_on_thread(
+      EMSCRIPTEN_EVENT_TARGET_DOCUMENT, user_data, true, web_on_pointerlockerror, thread);
 
   /* The right mouse button is used by Blender, not for the browser's context menu. */
   EM_ASM({
@@ -395,10 +425,52 @@ void GHOST_SystemEmscripten::processWebEvent(const GHOST_WebEvent &event)
 
   switch (event.type) {
     case GHOST_WebEvent::Type::MouseMove: {
-      cursor_x_ = event.x;
-      cursor_y_ = event.y;
-      pushEvent(std::make_unique<GHOST_EventCursor>(
-          event.time_ms, GHOST_kEventCursorMove, window, event.x, event.y, GHOST_TABLET_DATA_NONE));
+      if (pointer_locked_) {
+        /* The browser reports no position while the pointer is locked. */
+        cursor_x_ += event.dx;
+        cursor_y_ += event.dy;
+      }
+      else {
+        cursor_x_ = event.x;
+        cursor_y_ = event.y;
+      }
+      pushEvent(std::make_unique<GHOST_EventCursor>(event.time_ms,
+                                                    GHOST_kEventCursorMove,
+                                                    window,
+                                                    cursor_x_,
+                                                    cursor_y_,
+                                                    GHOST_TABLET_DATA_NONE));
+      break;
+    }
+    case GHOST_WebEvent::Type::PointerLock: {
+      if (event.locked == pointer_locked_) {
+        break;
+      }
+      pointer_locked_ = event.locked;
+      if (pointer_locked_) {
+        lock_x_ = cursor_x_;
+        lock_y_ = cursor_y_;
+      }
+      else {
+        /* The cursor is shown again where it was locked. */
+        cursor_x_ = lock_x_;
+        cursor_y_ = lock_y_;
+        pushEvent(std::make_unique<GHOST_EventCursor>(event.time_ms,
+                                                      GHOST_kEventCursorMove,
+                                                      window,
+                                                      cursor_x_,
+                                                      cursor_y_,
+                                                      GHOST_TABLET_DATA_NONE));
+        if (pointer_lock_wanted_) {
+          /* The browser ended the lock while the grab is still on: the user pressed Escape
+           * (which browsers don't pass on in that case) or the page lost the focus. Cancel the
+           * operation like Escape would. */
+          for (const GHOST_TEventType type : {GHOST_kEventKeyDown, GHOST_kEventKeyUp}) {
+            pushEvent(std::make_unique<GHOST_EventKey>(
+                event.time_ms, type, window, GHOST_kKeyEsc, false, ""));
+          }
+        }
+      }
       break;
     }
     case GHOST_WebEvent::Type::MouseDown:
@@ -426,7 +498,7 @@ void GHOST_SystemEmscripten::processWebEvent(const GHOST_WebEvent &event)
       const bool down = event.type == GHOST_WebEvent::Type::MouseDown;
       buttons_.set(button, down);
       /* The cursor may have moved without motion events (e.g. focusing the page). */
-      if (event.x != cursor_x_ || event.y != cursor_y_) {
+      if (!pointer_locked_ && (event.x != cursor_x_ || event.y != cursor_y_)) {
         cursor_x_ = event.x;
         cursor_y_ = event.y;
         pushEvent(std::make_unique<GHOST_EventCursor>(event.time_ms,

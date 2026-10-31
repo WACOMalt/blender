@@ -72,6 +72,13 @@ Headless Chromium draws with SwiftShader, which drops lines crossing the camera 
   and WebGPU. GPU commands are recorded on Blender's threads and executed on the main thread.
 - Shaders are compiled from GLSL to WGSL inside Blender by glslang and Tint
   (`web/shader_compiler/`, built by `build_deps.sh` from Dawn's sources).
+- Input comes from the Emscripten HTML5 API (`intern/ghost/intern/GHOST_SystemEmscripten.cc`).
+  Browsers can not move the cursor, so continuous grabs (orbiting, dragging values, transforms)
+  use the Pointer Lock API: the cursor is hidden and relative motion is accumulated, Blender
+  draws its software cursor. The Escape key that ends a pointer lock is swallowed by browsers,
+  the backend reports it to Blender so the operation is cancelled as expected. Headless
+  Chromium can not synthesize real locked-pointer motion (`web/tests/hook.js` logs the
+  requests).
 
 ## Hosting
 

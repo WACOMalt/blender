@@ -3,7 +3,8 @@
 // Load a page in headless Chromium with WebGPU, print its console, wait for "RESULT:" (or the
 // timeout), then run the actions and take a screenshot.
 //
-// Actions are separated by ';': `click:X,Y`, `move:X,Y`, `key:KEY` (Playwright key names),
+// Actions are separated by ';': `click:X,Y`, `move:X,Y`, `down:BUTTON`, `up:BUTTON`,
+// `eval:JS` (prints the result), `key:KEY` (Playwright key names),
 // `type:TEXT`, `wait:MS`, `shot:FILE.png`, `reload:` (keeps the browser storage) and
 // `drop:URL@X,Y` (drops the file at URL on the canvas).
 const { chromium } = require('playwright');
@@ -26,14 +27,21 @@ const { chromium } = require('playwright');
   await Promise.race([finished, new Promise(r => setTimeout(r, timeoutMs))]);
   for (const action of actions.split(';').filter(Boolean)) {
     const [name, arg = ''] = [action.slice(0, action.indexOf(':')), action.slice(action.indexOf(':') + 1)];
-    console.log(`[action] ${action}`);
+    console.log(`${elapsed()} [action] ${action}`);
     if (name === 'click') {
       const [x, y] = arg.split(',').map(Number);
       await page.mouse.click(x, y);
     }
     else if (name === 'move') {
       const [x, y] = arg.split(',').map(Number);
-      await page.mouse.move(x, y);
+      await page.mouse.move(x, y, { steps: 4 });
+    }
+    else if (name === 'down' || name === 'up') {
+      /* `down:left|middle|right`, `up:...`: press or release a mouse button at the current position. */
+      await page.mouse[name]({ button: arg || 'left' });
+    }
+    else if (name === 'eval') {
+      console.log(`[eval] ${await page.evaluate(arg)}`);
     }
     else if (name === 'key') {
       await page.keyboard.press(arg);

@@ -16,6 +16,7 @@
 #include "../GHOST_Types.hh"
 #include "GHOST_System.hh"
 
+#include <atomic>
 #include <condition_variable>
 #include <deque>
 #include <mutex>
@@ -38,11 +39,17 @@ struct GHOST_WebEvent {
     Blur,
     /** Files dropped on the canvas, written to the file-system by the page. */
     Drop,
+    /** The pointer lock (used for cursor grabs) was acquired or released. */
+    PointerLock,
   };
   Type type;
   uint64_t time_ms;
   /** Canvas position in device pixels (mouse events). */
   int32_t x, y;
+  /** Motion in device pixels, the only position information while the pointer is locked. */
+  int32_t dx, dy;
+  /** Pointer lock state (#Type::PointerLock). */
+  bool locked;
   /** DOM `MouseEvent.button`. */
   int button;
   /** Wheel steps (positive: away from the user, like other GHOST backends). */
@@ -64,6 +71,21 @@ class GHOST_SystemEmscripten : public GHOST_System {
   GHOST_TSuccess init() override;
 
   bool processEvents(bool waitForEvent) override;
+
+  /** The window grabs the cursor with a pointer lock (see #processWebEvent). */
+  void setPointerLockWanted(bool wanted)
+  {
+    pointer_lock_wanted_ = wanted;
+  }
+  /** Browser's main thread: a pointer lock request failed, retry on the next input event. */
+  void onPointerLockError()
+  {
+    pointer_lock_retry_ = true;
+  }
+  bool pointerLockRetryNeeded()
+  {
+    return pointer_lock_wanted_ && pointer_lock_retry_.exchange(false);
+  }
 
   bool setConsoleWindowState(GHOST_TConsoleWindowState /*action*/) override
   {
@@ -141,8 +163,20 @@ class GHOST_SystemEmscripten : public GHOST_System {
   /* State as seen by Blender's thread, updated by #processWebEvent. */
   int32_t cursor_x_ = 0;
   int32_t cursor_y_ = 0;
+  /**
+   * While the pointer is locked (cursor grab) the browser reports motion only, the position is
+   * accumulated: it may leave the canvas, like other platforms' grab with wrapping. The real
+   * cursor stays at `lock_x_`, `lock_y_` and reappears there when the lock ends.
+   */
+  bool pointer_locked_ = false;
+  int32_t lock_x_ = 0;
+  int32_t lock_y_ = 0;
   GHOST_Buttons buttons_;
   GHOST_ModifierKeys modifier_keys_;
+
+  /* Shared between Blender's thread (the grab) and the browser's main thread (events). */
+  std::atomic<bool> pointer_lock_wanted_{false};
+  std::atomic<bool> pointer_lock_retry_{false};
 
   /** Only used inside Blender, the system clipboard needs asynchronous browser APIs. */
   mutable std::string clipboard_;

@@ -152,6 +152,9 @@ node web/tools/run_page.js https://blender.bsums.xyz/ shot.png 120000
   files, and the caches under `.cache/`: translated WGSL shaders, Python byte-code, asset
   library indexes) is kept in **IndexedDB** and restored on the next visit. It is synced every
   10 s and when the tab is hidden. Clearing the site data resets Blender to its defaults.
+- Dragging (orbiting the view, dragging values, transforms) locks the pointer: the cursor is
+  hidden until the button is released, Escape cancels. Browsers ask for permission the first
+  time or show a notice.
 - `.blend` files (and images) can be dropped on the canvas to open them; the "Files" button
   in the status bar lists the home directory with download and upload.
 - URL parameters for testing: `?args=-b,--python-expr,print(1)` (Blender's command line,
