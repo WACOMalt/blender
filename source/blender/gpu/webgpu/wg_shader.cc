@@ -542,7 +542,8 @@ static void print_buffer_image(std::ostream &os,
                                const Qualifier qualifiers,
                                const TextureFormat image_format,
                                const std::string &name,
-                               const bool is_sampler)
+                               const bool is_sampler,
+                               const std::string &nl)
 {
   WGTexelLayout layout;
   if (!wg_texel_layout_get(image_format, layout)) {
@@ -558,7 +559,6 @@ static void print_buffer_image(std::ostream &os,
   /* The buffer is `int` for atomics on signed images, `uint` otherwise. */
   const std::string elem = layout.kind == WGTexelLayout::Kind::Sint32 ? "int" : "uint";
   const bool writable = flag_is_set(qualifiers, Qualifier::write);
-  const std::string nl = " \\\n";
 
   if (vertex_alias_binding >= 0) {
     os << "layout(binding = wg_binding_" << name << ", std430) wg_qualifier_" << name;
@@ -622,12 +622,12 @@ static void print_buffer_image(std::ostream &os,
 static void print_sampled_image(std::ostream &os,
                                 const uint32_t binding,
                                 const ImageType image_type,
-                                const std::string &name)
+                                const std::string &name,
+                                const std::string &nl)
 {
   const std::string prefix = wg_image_vector_prefix(image_type);
   const int coord_size = wg_image_coord_size(image_type);
   const std::string coord = wg_ivec(coord_size);
-  const std::string nl = " \\\n";
   os << "layout(binding = " << binding << ") uniform ";
   print_image_type(os, image_type, ShaderCreateInfo::Resource::BindType::SAMPLER);
   os << name << ";" << nl;
@@ -697,39 +697,11 @@ static void print_resource(std::ostream &os,
   const std::string name = resource_name(res);
   if (ELEM(res.bind_type,
            ShaderCreateInfo::Resource::BindType::IMAGE,
-           ShaderCreateInfo::Resource::BindType::SAMPLER))
+           ShaderCreateInfo::Resource::BindType::SAMPLER) &&
+      WGShaderInterface::image_mode(res) != WGImageMode::Native)
   {
-    const WGImageMode mode = WGShaderInterface::image_mode(res);
-    if (mode == WGImageMode::Buffer) {
-      const bool is_sampler = res.bind_type == ShaderCreateInfo::Resource::BindType::SAMPLER;
-      const ImageType type = is_sampler ? res.sampler.type : res.image.type;
-      const bool is_signed = ELEM(
-          type, ImageType::AtomicInt2D, ImageType::AtomicInt2DArray, ImageType::AtomicInt3D);
-      const bool is_atomic = ELEM(type,
-                                  ImageType::AtomicUint2D,
-                                  ImageType::AtomicUint2DArray,
-                                  ImageType::AtomicUint3D,
-                                  ImageType::AtomicInt2D,
-                                  ImageType::AtomicInt2DArray,
-                                  ImageType::AtomicInt3D);
-      const TextureFormat format = is_atomic ?
-                                       (is_signed ? TextureFormat::SINT_32 :
-                                                    TextureFormat::UINT_32) :
-                                       wg_device_format(TextureFormat(res.image.format));
-      print_buffer_image(os,
-                         binding,
-                         vertex_alias_binding,
-                         type,
-                         is_sampler ? Qualifier::read : res.image.qualifiers,
-                         format,
-                         is_sampler ? res.sampler.name : res.image.name,
-                         is_sampler);
-      return;
-    }
-    if (mode == WGImageMode::Sampled) {
-      print_sampled_image(os, binding, res.image.type, res.image.name);
-      return;
-    }
+    /* Declared with their helpers after the macros, see #print_emulated_image. */
+    return;
   }
   if (use_macros) {
     os << "layout(binding = wg_binding_" << name;
@@ -797,6 +769,53 @@ static void print_resource(std::ostream &os,
   print_resource(
       os, shader_interface.binding_get(res), shader_interface.vertex_alias_binding_get(res), res);
   os << " \\\n";
+}
+
+/**
+ * Declaration and helpers of an image bound as a texture or emulated with a buffer. They are not
+ * part of the `CREATE_INFO_RES_` macros: Blender's preprocessor limits the length of macros,
+ * which cuts the helpers.
+ */
+static void print_emulated_image(std::ostream &os,
+                                 const WGShaderInterface &shader_interface,
+                                 const ShaderCreateInfo::Resource &res)
+{
+  if (!ELEM(res.bind_type,
+            ShaderCreateInfo::Resource::BindType::IMAGE,
+            ShaderCreateInfo::Resource::BindType::SAMPLER))
+  {
+    return;
+  }
+  const WGImageMode mode = WGShaderInterface::image_mode(res);
+  const uint32_t binding = shader_interface.binding_get(res);
+  if (mode == WGImageMode::Buffer) {
+    const bool is_sampler = res.bind_type == ShaderCreateInfo::Resource::BindType::SAMPLER;
+    const ImageType type = is_sampler ? res.sampler.type : res.image.type;
+    const bool is_signed = ELEM(
+        type, ImageType::AtomicInt2D, ImageType::AtomicInt2DArray, ImageType::AtomicInt3D);
+    const bool is_atomic = ELEM(type,
+                                ImageType::AtomicUint2D,
+                                ImageType::AtomicUint2DArray,
+                                ImageType::AtomicUint3D,
+                                ImageType::AtomicInt2D,
+                                ImageType::AtomicInt2DArray,
+                                ImageType::AtomicInt3D);
+    const TextureFormat format = is_atomic ?
+                                     (is_signed ? TextureFormat::SINT_32 : TextureFormat::UINT_32) :
+                                     wg_device_format(TextureFormat(res.image.format));
+    print_buffer_image(os,
+                       binding,
+                       shader_interface.vertex_alias_binding_get(res),
+                       type,
+                       is_sampler ? Qualifier::read : res.image.qualifiers,
+                       format,
+                       is_sampler ? res.sampler.name : res.image.name,
+                       is_sampler,
+                       "\n");
+  }
+  else if (mode == WGImageMode::Sampled) {
+    print_sampled_image(os, binding, res.image.type, res.image.name, "\n");
+  }
 }
 
 /**
@@ -1038,6 +1057,16 @@ std::string WGShader::resources_declare(const ShaderCreateInfo &info) const
       }
     }
     ss << "};\n";
+  }
+  /* Images bound as textures or emulated with buffers (after their push constants). */
+  for (const Span<ShaderCreateInfo::Resource> resources :
+       {info.pass_resources_.as_span(),
+        info.batch_resources_.as_span(),
+        info.geometry_resources_.as_span()})
+  {
+    for (const ShaderCreateInfo::Resource &res : resources) {
+      print_emulated_image(ss, wg_interface, res);
+    }
   }
 
   ss << "\n";
