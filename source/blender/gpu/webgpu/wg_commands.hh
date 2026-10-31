@@ -339,6 +339,12 @@ struct WGBindingResource {
   uint32_t base_layer, layer_count;
   /** Buffer kinds: `object` is a texture, bind the buffer of its emulated image at `base_mip`. */
   bool buffer_image;
+  /**
+   * The buffer is also bound writable by the same draw, which is a usage conflict in WebGPU:
+   * bind a temporary copy made before the draw (set by #WGContext, used by the device).
+   */
+  bool copy_source;
+  WGPUBuffer temporary_copy;
 };
 
 struct WGVertexBufferBinding {

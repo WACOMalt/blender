@@ -575,6 +575,24 @@ static void wg_resources_resolve_stream_data(WGShader &shader,
                                         use.uniform_buffer->binding_ensure(stream, generation);
     wg_buffer_binding(binding, pending.resources[use.index]);
   }
+  /* Buffers bound writable and read-only (or as uniform) by the same draw conflict in WebGPU,
+   * the read-only bindings get a copy (see #WGBindingResource::copy_source). */
+  for (const WGBindingResource &writable : pending.resources) {
+    if (writable.kind != WGBindingLayout::Kind::StorageBuffer || writable.buffer_image ||
+        writable.object == WG_STREAM_DATA_ID)
+    {
+      continue;
+    }
+    for (WGBindingResource &resource : pending.resources) {
+      if (ELEM(resource.kind,
+               WGBindingLayout::Kind::ReadOnlyStorageBuffer,
+               WGBindingLayout::Kind::UniformBuffer) &&
+          !resource.buffer_image && resource.object == writable.object)
+      {
+        resource.copy_source = true;
+      }
+    }
+  }
   if (pending.push_constants != -1) {
     const Span<uint8_t> data = shader.push_constants_data();
     WGBindingResource &resource = pending.resources[pending.push_constants];

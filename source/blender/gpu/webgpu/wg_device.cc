@@ -375,10 +375,16 @@ WGPUBindGroup WGDevice::bind_group_create(WGObjectID pipeline_layout,
       case WGBindingLayout::Kind::UniformBuffer:
       case WGBindingLayout::Kind::StorageBuffer:
       case WGBindingLayout::Kind::ReadOnlyStorageBuffer:
-        entry.buffer = resource.buffer_image ?
-                           buffer_image_get(resource.object, resource.base_mip) :
-                           buffer_get(resource.object, state);
-        entry.offset = resource.offset;
+        if (resource.temporary_copy) {
+          entry.buffer = resource.temporary_copy;
+          entry.offset = 0;
+        }
+        else {
+          entry.buffer = resource.buffer_image ?
+                             buffer_image_get(resource.object, resource.base_mip) :
+                             buffer_get(resource.object, state);
+          entry.offset = resource.offset;
+        }
         entry.size = resource.size ? resource.size : WGPU_WHOLE_SIZE;
         break;
       case WGBindingLayout::Kind::Texture:
@@ -508,20 +514,51 @@ static void wg_interrupt_render_pass(WGPURenderPassEncoder &render_pass, uint32_
   wg_end_render_pass(render_pass, render_pass_id);
 }
 
+void WGDevice::resources_copy_sources(MutableSpan<WGBindingResource> resources,
+                                      ExecuteState &state)
+{
+  for (WGBindingResource &resource : resources) {
+    if (!resource.copy_source) {
+      continue;
+    }
+    WGPUBuffer source = buffer_get(resource.object, state);
+    if (source == nullptr) {
+      continue;
+    }
+    const uint64_t size = resource.size ? resource.size :
+                                          wgpuBufferGetSize(source) - resource.offset;
+    WGPUBufferDescriptor desc = {};
+    desc.label = wg_string("read-only copy");
+    desc.usage = WGPUBufferUsage_CopyDst | WGPUBufferUsage_Storage | WGPUBufferUsage_Uniform;
+    desc.size = WGCommandStream::align_up(size, 4);
+    WGPUBuffer copy = wgpuDeviceCreateBuffer(device_, &desc);
+    /* Copies can't be inside a pass. */
+    wg_interrupt_render_pass(state.render_pass, state.render_pass_id);
+    wgpuCommandEncoderCopyBufferToBuffer(
+        state.encoder, source, resource.offset, copy, 0, desc.size);
+    resource.temporary_copy = copy;
+    state.temporary_buffers.append(copy);
+  }
+}
+
 void WGDevice::execute_draw(const WGCmdDraw &cmd, const uint8_t *trailing, ExecuteState &state)
 {
-  if (!render_pass_activate(cmd.pass_id, state)) {
-    return;
-  }
   WGPURenderPipeline pipeline = render_pipelines_.lookup_default(cmd.pipeline, nullptr);
   if (pipeline == nullptr || invalid_pipelines_.contains(cmd.pipeline)) {
     /* An invalid pipeline would invalidate the whole command buffer. */
     return;
   }
+  Vector<WGBindingResource, 32> resources_copy(
+      Span(reinterpret_cast<const WGBindingResource *>(trailing), cmd.resources_len));
+  resources_copy_sources(resources_copy, state);
+  const WGBindingResource *resources = resources_copy.data();
+
+  if (!render_pass_activate(cmd.pass_id, state)) {
+    return;
+  }
   WGPURenderPassEncoder pass = state.render_pass;
   wgpuRenderPassEncoderSetPipeline(pass, pipeline);
 
-  const WGBindingResource *resources = reinterpret_cast<const WGBindingResource *>(trailing);
   for (uint32_t group = 0; group < 2; group++) {
     WGPUBindGroup bind_group = bind_group_create(
         cmd.pipeline_layout, group, resources, cmd.resources_len, state);
@@ -586,9 +623,12 @@ void WGDevice::execute_dispatch(const WGCmdDispatch &cmd,
     return;
   }
   wg_interrupt_render_pass(state.render_pass, state.render_pass_id);
+  Vector<WGBindingResource, 32> resources_copy(
+      Span(reinterpret_cast<const WGBindingResource *>(trailing), cmd.resources_len));
+  resources_copy_sources(resources_copy, state);
+  const WGBindingResource *resources = resources_copy.data();
   WGPUComputePassEncoder pass = wgpuCommandEncoderBeginComputePass(state.encoder, nullptr);
   wgpuComputePassEncoderSetPipeline(pass, pipeline);
-  const WGBindingResource *resources = reinterpret_cast<const WGBindingResource *>(trailing);
   for (uint32_t group = 0; group < 2; group++) {
     WGPUBindGroup bind_group = bind_group_create(
         cmd.pipeline_layout, group, resources, cmd.resources_len, state);
