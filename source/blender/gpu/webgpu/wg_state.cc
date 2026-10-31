@@ -42,13 +42,20 @@ void WGStateManager::image_bind(Texture *tex, int unit)
     return;
   }
   images[unit] = static_cast<WGTexture *>(tex);
+  /* For the debug validation of image formats. */
+  if (unit < GPU_MAX_IMAGE) {
+    image_formats[unit] = TextureWriteFormat(tex->format_get());
+  }
 }
 
 void WGStateManager::image_unbind(Texture *tex)
 {
-  for (WGTexture *&image : images) {
-    if (image == tex) {
-      image = nullptr;
+  for (const int unit : IndexRange(images.size())) {
+    if (images[unit] == tex) {
+      images[unit] = nullptr;
+      if (unit < GPU_MAX_IMAGE) {
+        image_formats[unit] = TextureWriteFormat::Invalid;
+      }
     }
   }
 }
@@ -56,6 +63,7 @@ void WGStateManager::image_unbind(Texture *tex)
 void WGStateManager::image_unbind_all()
 {
   images.fill(nullptr);
+  image_formats.fill(TextureWriteFormat::Invalid);
 }
 
 void WGStateManager::uniform_buffer_bind(WGUniformBuf *uniform_buffer, int slot)
