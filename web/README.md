@@ -66,6 +66,8 @@ Headless Chromium draws with SwiftShader, which drops lines crossing the camera 
 
 ## Hosting
 
+See `web/HOSTING.md` for the full deployment notes (headers, compression, caching, nginx).
+
 Threads use `SharedArrayBuffer`, which browsers only allow on cross-origin isolated pages.
 The web server must send these headers for the page and all of its files:
 
