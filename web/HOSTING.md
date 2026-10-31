@@ -68,12 +68,12 @@ web/build_bundle.sh         # the static files into ../build_web/bundle
    while it downloads.
 4. Pre-compressed files (`.br` and/or `.gz` next to the originals, served with
    `Content-Encoding`). Compressing 92 MB on the fly for each visitor is not an option.
-5. Caching: the files never change between deployments, so long `Cache-Control` max-age is
-   fine as long as a new deployment replaces all files together (`blender.js` and
-   `blender.wasm` must match, `blender-data.json` and `blender-data.bin` must match). Using
-   `no-cache` on `index.html` and `blender_loader.js` and `max-age=31536000` on the rest is a
-   reasonable split, provided the big files get a new name or query string when they change
-   (or simply accept that a deployment invalidates everybody's cache).
+5. Caching: `blender.js` and `blender.wasm` must come from the same deployment (as must
+   `blender-data.json` and `blender-data.bin`), and the file names don't change between
+   deployments. Serve everything with `Cache-Control: no-cache`: browsers keep the files but
+   revalidate them on each visit (a cheap 304 when unchanged). A long `max-age` makes browsers
+   mix the cached `blender.wasm` of a previous deployment with a new `blender.js`, and the page
+   fails with errors like "wasmExports.xyz is undefined".
 
 No `Content-Security-Policy` is needed; if one is set it must allow `wasm-unsafe-eval`,
 `worker-src 'self'` and `blob:` workers.
@@ -85,10 +85,14 @@ server {
     listen 443 ssl http2;
     server_name blender.bsums.xyz;
     root /var/www/blender;   # the bundle directory
+    index index.html;
 
     # Required for SharedArrayBuffer (threads). `always` also adds them to error responses.
+    # Keep all `add_header` here: one in a location would replace these.
     add_header Cross-Origin-Opener-Policy same-origin always;
     add_header Cross-Origin-Embedder-Policy require-corp always;
+    # Revalidate every file, see "Caching" above.
+    add_header Cache-Control "no-cache" always;
 
     types {
         application/wasm wasm;
@@ -101,14 +105,8 @@ server {
     brotli_static on;   # needs the ngx_brotli module, otherwise remove this line
     gzip_static on;
 
-    location = /index.html { add_header Cache-Control "no-cache"; }
-    location = /blender_loader.js { add_header Cache-Control "no-cache"; }
     location / {
-        add_header Cache-Control "public, max-age=31536000";
-        # `add_header` in a location replaces the server-level ones, repeat them:
-        add_header Cross-Origin-Opener-Policy same-origin always;
-        add_header Cross-Origin-Embedder-Policy require-corp always;
-        try_files $uri =404;
+        try_files $uri $uri/ =404;
     }
 }
 ```
