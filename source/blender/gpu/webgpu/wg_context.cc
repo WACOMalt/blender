@@ -54,6 +54,8 @@ WGContext::~WGContext()
   }
   delete state_manager;
   state_manager = nullptr;
+  delete texture_pool;
+  texture_pool = nullptr;
 }
 
 WGStateManager &WGContext::state_manager_get() const
