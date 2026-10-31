@@ -68,6 +68,9 @@
 #include "ED_view3d.hh"
 
 #include "GPU_capabilities.hh"
+
+#include "BKE_report.hh"
+#include "RE_engine.h"
 #include "GPU_framebuffer.hh"
 #include "GPU_immediate.hh"
 #include "GPU_matrix.hh"
@@ -1915,6 +1918,10 @@ static void drw_draw_render_loop_2d(DRWContext &draw_ctx)
 
 void DRW_draw_view(const bContext *C)
 {
+  if (!GPU_storage_buffer_support()) {
+    /* The draw manager can't run (OpenGL ES): node editor backdrop, sequencer preview, etc. */
+    return;
+  }
   Depsgraph *depsgraph = CTX_data_expect_evaluated_depsgraph(C);
   ARegion *region = CTX_wm_region(C);
   View3D *v3d = CTX_wm_view3d(C);
@@ -1953,6 +1960,10 @@ void DRW_draw_render_loop_offscreen(Depsgraph *depsgraph,
                                     GPUOffScreen *ofs,
                                     GPUViewport *viewport)
 {
+  if (!GPU_storage_buffer_support()) {
+    /* The draw manager can't run (OpenGL ES). */
+    return;
+  }
   const bool is_xr_surface = ((v3d->flag & V3D_XR_SESSION_SURFACE) != 0);
 
   /* Create temporary viewport if needed or update the existing viewport. */
@@ -2112,6 +2123,11 @@ void DRW_render_to_image(
     std::function<void(RenderResult *)> store_metadata_cb)
 {
   using namespace blender::draw;
+  if (!GPU_storage_buffer_support()) {
+    /* EEVEE and Workbench need the draw manager, which can't run in OpenGL ES. */
+    RE_engine_report(engine, RPT_ERROR, "This render engine needs WebGPU, use Cycles");
+    return;
+  }
   Scene *scene = DEG_get_evaluated_scene(depsgraph);
   ViewLayer *view_layer = DEG_get_evaluated_view_layer(depsgraph);
   Render *render = engine->re;
@@ -2295,6 +2311,10 @@ void DRW_draw_select_loop(Depsgraph *depsgraph,
                           void *object_filter_user_data)
 {
   using namespace blender::draw;
+  if (!GPU_storage_buffer_support()) {
+    /* The draw manager can't run (OpenGL ES): nothing is selected. */
+    return;
+  }
   const int viewport_size[2] = {BLI_rcti_size_x(rect), BLI_rcti_size_y(rect)};
 
   const bool use_gpencil = !draw_surface && DRW_render_check_grease_pencil(depsgraph, v3d);
@@ -2357,6 +2377,10 @@ void DRW_draw_depth_loop(Depsgraph *depsgraph,
                          const bool use_only_active_object)
 {
   using namespace blender::draw;
+  if (!GPU_storage_buffer_support()) {
+    /* The draw manager can't run (OpenGL ES). */
+    return;
+  }
 
   DRWContext draw_ctx(use_only_active_object ? DRWContext::DEPTH_ACTIVE_OBJECT : DRWContext::DEPTH,
                       depsgraph,
@@ -2413,6 +2437,10 @@ void DRW_draw_depth_loop(Depsgraph *depsgraph,
 
 void DRW_draw_select_id(Depsgraph *depsgraph, ARegion *region, View3D *v3d)
 {
+  if (!GPU_storage_buffer_support()) {
+    /* The draw manager can't run (OpenGL ES). */
+    return;
+  }
   SELECTID_Context *sel_ctx = DRW_select_engine_context_get();
   GPUViewport *viewport = WM_draw_region_get_viewport(region);
   if (!viewport) {

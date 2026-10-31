@@ -8,6 +8,9 @@
 
 #include "GHOST_SystemEmscripten.hh"
 #include "GHOST_ContextNone.hh"
+#ifdef WITH_OPENGL_BACKEND
+#  include "GHOST_ContextWebGL.hh"
+#endif
 #include "GHOST_EventButton.hh"
 #include "GHOST_EventCursor.hh"
 #include "GHOST_EventDragnDrop.hh"
@@ -723,10 +726,22 @@ GHOST_TSuccess GHOST_SystemEmscripten::setCursorPosition(int32_t /*x*/, int32_t 
 
 GHOST_IContext *GHOST_SystemEmscripten::createOffscreenContext(GHOST_GPUSettings gpu_settings)
 {
-  /* WebGPU is used directly by the GPU module, contexts have nothing to set up. */
   const GHOST_ContextParams context_params = GHOST_CONTEXT_PARAMS_FROM_GPU_SETTINGS_OFFSCREEN(
       gpu_settings);
-  GHOST_Context *context = new GHOST_ContextNone(context_params);
+  GHOST_Context *context = nullptr;
+#ifdef WITH_OPENGL_BACKEND
+  if (gpu_settings.context_type == GHOST_kDrawingContextTypeOpenGL) {
+    /* A view of the window's WebGL context (WebGL contexts can't share resources). */
+    context = new GHOST_ContextWebGL(
+        context_params,
+        [this](uint32_t &width, uint32_t &height) { getCanvasSize(width, height); },
+        false);
+  }
+#endif
+  if (context == nullptr) {
+    /* WebGPU is used directly by the GPU module, contexts have nothing to set up. */
+    context = new GHOST_ContextNone(context_params);
+  }
   if (context->initializeDrawingContext()) {
     return context;
   }

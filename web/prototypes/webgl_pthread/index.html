@@ -1,0 +1,21 @@
+<!doctype html><html><body>
+<canvas id="canvas" width="320" height="240"></canvas>
+<script>
+var frames = 0;
+var ctx = document.getElementById('canvas').getContext('2d');
+var Module = {
+  print: t => console.log(t),
+  printErr: t => console.error(t),
+  /* Called with each frame drawn by the pthread (see `web_gl_present`). */
+  webglPresent: bitmap => {
+    ctx.drawImage(bitmap, 0, 0);
+    bitmap.close();
+    if (++frames === 30) {
+      const p = ctx.getImageData(160, 120, 1, 1).data;
+      console.log(`RESULT: ${frames} frames presented, center pixel ${p[0]} ${p[1]} ${p[2]} ${p[3]}`);
+    }
+  },
+};
+</script>
+<script src="webgl_pthread.js"></script>
+</body></html>

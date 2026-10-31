@@ -168,6 +168,10 @@ void GLFrameBuffer::update_attachments()
       first_attachment = (attach.tex) ? type : first_attachment;
     }
 
+    if (attach.tex == nullptr && GLContext::is_gles) {
+      glFramebufferTexture2D(GL_FRAMEBUFFER, gl_attachment, GL_TEXTURE_2D, 0, 0);
+      continue;
+    }
     if (attach.tex == nullptr) {
       glFramebufferTexture(GL_FRAMEBUFFER, gl_attachment, 0, 0);
       continue;
@@ -182,6 +186,18 @@ void GLFrameBuffer::update_attachments()
     }
     else if (attach.layer > -1) {
       glFramebufferTextureLayer(GL_FRAMEBUFFER, gl_attachment, gl_tex, attach.mip, attach.layer);
+    }
+    else if (GLContext::is_gles) {
+      /* No layered frame-buffers in OpenGL ES: the first layer or face of the level. */
+      if (GPU_texture_is_array(attach.tex) || GPU_texture_dimensions(attach.tex) == 3) {
+        glFramebufferTextureLayer(GL_FRAMEBUFFER, gl_attachment, gl_tex, attach.mip, 0);
+      }
+      else {
+        const GLenum gl_target = GPU_texture_is_cube(attach.tex) ?
+                                     GL_TEXTURE_CUBE_MAP_POSITIVE_X :
+                                     GL_TEXTURE_2D;
+        glFramebufferTexture2D(GL_FRAMEBUFFER, gl_attachment, gl_target, gl_tex, attach.mip);
+      }
     }
     else {
       /* The whole texture level is attached. The frame-buffer is potentially layered. */
@@ -406,7 +422,10 @@ void GLFrameBuffer::bind(bool enabled_srgb)
 
   if (context_->active_fb != this || enabled_srgb_ != enabled_srgb) {
     enabled_srgb_ = enabled_srgb;
-    if (enabled_srgb && srgb_) {
+    if (GLContext::is_gles) {
+      /* OpenGL ES always encodes writes to sRGB attachments. */
+    }
+    else if (enabled_srgb && srgb_) {
       glEnable(GL_FRAMEBUFFER_SRGB);
     }
     else {

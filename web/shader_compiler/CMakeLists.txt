@@ -66,9 +66,23 @@ set(TINT_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(TINT_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
 add_subdirectory("${DAWN_DIR}" dawn EXCLUDE_FROM_ALL)
 
+# SPIRV-Cross for GLSL ES 3.00 (WebGL2, the OpenGL backend), fetched next to Dawn's dependencies.
+set(SPIRV_CROSS_CLI OFF CACHE BOOL "" FORCE)
+set(SPIRV_CROSS_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
+set(SPIRV_CROSS_ENABLE_HLSL OFF CACHE BOOL "" FORCE)
+set(SPIRV_CROSS_ENABLE_MSL OFF CACHE BOOL "" FORCE)
+set(SPIRV_CROSS_ENABLE_CPP OFF CACHE BOOL "" FORCE)
+set(SPIRV_CROSS_ENABLE_REFLECT OFF CACHE BOOL "" FORCE)
+set(SPIRV_CROSS_ENABLE_C_API OFF CACHE BOOL "" FORCE)
+set(SPIRV_CROSS_ENABLE_UTIL OFF CACHE BOOL "" FORCE)
+set(SPIRV_CROSS_SHARED OFF CACHE BOOL "" FORCE)
+set(SPIRV_CROSS_STATIC ON CACHE BOOL "" FORCE)
+add_subdirectory("${DAWN_THIRD_PARTY}/spirv-cross/src" spirv-cross EXCLUDE_FROM_ALL)
+
 add_library(web_shader_compiler STATIC web_shader_compiler.cc web_shader_compiler.h)
 target_include_directories(web_shader_compiler PRIVATE "${DAWN_DIR}" "${DAWN_THIRD_PARTY}/glslang/src")
 target_link_libraries(web_shader_compiler PUBLIC
+  spirv-cross-glsl
   tint_api
   tint_lang_spirv_reader
   tint_lang_wgsl_inspector

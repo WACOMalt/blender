@@ -581,6 +581,11 @@ static void wm_region_test_xr_do_draw(const wmWindowManager *wm,
 
 static bool wm_region_use_viewport_by_type(short space_type, short region_type)
 {
+  if (!GPU_storage_buffer_support()) {
+    /* The draw manager can't run (OpenGL ES): the regions draw without it (a message in the 3D
+     * viewport, the image in the image editor). */
+    return false;
+  }
   return (ELEM(space_type, SPACE_VIEW3D, SPACE_IMAGE, SPACE_NODE) &&
           region_type == RGN_TYPE_WINDOW) ||
          ((space_type == SPACE_SEQ) && ELEM(region_type, RGN_TYPE_PREVIEW, RGN_TYPE_WINDOW));

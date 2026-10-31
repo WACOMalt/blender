@@ -32,6 +32,7 @@
 #include "DEG_depsgraph_debug.hh"
 #include "DEG_depsgraph_query.hh"
 
+#include "GPU_capabilities.hh"
 #include "GPU_context.hh"
 
 #ifdef WITH_PYTHON
@@ -1327,6 +1328,13 @@ void RE_engine_tile_highlight_clear_all(RenderEngine *engine)
 
 bool RE_engine_gpu_context_create(RenderEngine *engine)
 {
+  if (GPU_use_main_context_workaround()) {
+    /* GPU contexts can only be used on the main thread (WebGL): the engine can't update GPU
+     * resources from its own threads, its results are displayed from the render result. */
+    engine->use_drw_render_context = false;
+    return false;
+  }
+
   /* If there already is a draw manager render context available, reuse it. */
   engine->use_drw_render_context = (engine->re && RE_system_gpu_context_get(engine->re));
   if (engine->use_drw_render_context) {

@@ -68,6 +68,7 @@
 #include "DEG_depsgraph_debug.hh"
 #include "DEG_depsgraph_query.hh"
 
+#include "GPU_capabilities.hh"
 #include "GPU_framebuffer.hh"
 #include "GPU_immediate.hh"
 #include "GPU_immediate_util.hh"
@@ -1666,8 +1667,27 @@ void view3d_draw_region_info(const bContext *C, ARegion *region)
 /** \name Draw Viewport Contents
  * \{ */
 
+/** The draw manager needs storage buffers and compute shaders, which OpenGL ES (WebGL2) lacks. */
+static void view3d_draw_unsupported(ARegion *region)
+{
+  ui::theme::frame_buffer_clear(TH_BACK);
+  const char *message = RPT_("The 3D Viewport needs WebGPU, which this browser doesn't provide");
+  const int width = int(BLF_width(BLF_default(), message, BLF_DRAW_STR_DUMMY_MAX));
+  ui::theme::font_theme_color_set(BLF_default(), TH_TEXT);
+  BLF_draw_default(std::max(0, (region->winx - width) / 2),
+                   region->winy / 2,
+                   0.0f,
+                   message,
+                   BLF_DRAW_STR_DUMMY_MAX);
+}
+
 static void view3d_draw_view(const bContext *C, ARegion *region)
 {
+  if (!GPU_storage_buffer_support()) {
+    view3d_draw_unsupported(region);
+    return;
+  }
+
   ED_view3d_draw_setup_view(CTX_wm_manager(C),
                             CTX_wm_window(C),
                             CTX_data_expect_evaluated_depsgraph(C),

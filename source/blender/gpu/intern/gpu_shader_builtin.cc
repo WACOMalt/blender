@@ -179,10 +179,32 @@ static const char *builtin_shader_create_info_name_clipped(GPUBuiltinShader shad
   }
 }
 
+/** Polyline shaders read their vertices from storage buffers. Without storage buffers (OpenGL
+ * ES), wide lines are drawn as regular lines. */
+static GPUBuiltinShader builtin_shader_without_storage_buffers(GPUBuiltinShader shader)
+{
+  switch (shader) {
+    case GPU_SHADER_3D_POLYLINE_UNIFORM_COLOR:
+      return GPU_SHADER_3D_UNIFORM_COLOR;
+    case GPU_SHADER_3D_POLYLINE_CLIPPED_UNIFORM_COLOR:
+      return GPU_SHADER_3D_CLIPPED_UNIFORM_COLOR;
+    case GPU_SHADER_3D_POLYLINE_FLAT_COLOR:
+      return GPU_SHADER_3D_FLAT_COLOR;
+    case GPU_SHADER_3D_POLYLINE_SMOOTH_COLOR:
+      return GPU_SHADER_3D_SMOOTH_COLOR;
+    default:
+      return shader;
+  }
+}
+
 gpu::Shader *GPU_shader_get_builtin_shader_with_config(GPUBuiltinShader shader,
                                                        GPUShaderConfig sh_cfg)
 {
   BLI_assert(shader < GPU_SHADER_BUILTIN_LEN);
+
+  if (!GPU_storage_buffer_support()) {
+    shader = builtin_shader_without_storage_buffers(shader);
+  }
 
 #ifdef __GNUC__
 #  pragma GCC diagnostic push
@@ -232,9 +254,15 @@ gpu::Shader *GPU_shader_get_builtin_shader_with_config(GPUBuiltinShader shader,
   return (*sh_p)->get();
 }
 
+static GPUBuiltinShader builtin_shader_without_storage_buffers(GPUBuiltinShader shader);
+
 static void gpu_shader_warm_builtin_shader_async(GPUBuiltinShader shader, GPUShaderConfig sh_cfg)
 {
   BLI_assert(shader < GPU_SHADER_BUILTIN_LEN);
+
+  if (!GPU_storage_buffer_support()) {
+    shader = builtin_shader_without_storage_buffers(shader);
+  }
 
 #ifdef __GNUC__
 #  pragma GCC diagnostic push

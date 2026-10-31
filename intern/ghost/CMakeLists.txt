@@ -156,6 +156,13 @@ elseif(EMSCRIPTEN)
     intern/GHOST_SystemEmscripten.hh
     intern/GHOST_WindowEmscripten.hh
   )
+  if(WITH_OPENGL_BACKEND)
+    list(APPEND SRC
+      intern/GHOST_ContextWebGL.cc
+
+      intern/GHOST_ContextWebGL.hh
+    )
+  endif()
   add_definitions(-DWITH_GHOST_EMSCRIPTEN)
 elseif(WITH_GHOST_SDL)
   list(APPEND SRC
@@ -528,7 +535,7 @@ elseif(WIN32)
   endif()
 endif()
 
-if(UNIX AND NOT APPLE)
+if(UNIX AND NOT APPLE AND NOT EMSCRIPTEN)
   if(WITH_OPENGL_BACKEND)
     list(APPEND SRC
       intern/GHOST_ContextEGL.cc

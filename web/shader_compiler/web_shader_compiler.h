@@ -64,6 +64,24 @@ WSC_Result WSC_glsl_to_wgsl(const char *glsl,
 
 void WSC_result_free(WSC_Result *result);
 
+typedef struct WSC_EsslResult {
+  /** GLSL ES 3.00 source, or null on failure. */
+  char *essl;
+  /** Errors and warnings, or null. */
+  char *log;
+} WSC_EsslResult;
+
+/**
+ * Translate desktop GLSL (version 430, as written by the OpenGL backend) to GLSL ES 3.00 for
+ * WebGL2: GLSL → SPIR-V with glslang, SPIR-V → GLSL ES with SPIRV-Cross. Desktop GLSL rules
+ * apply to the input (implicit conversions), interface blocks between stages become separate
+ * variables, `binding` layouts are dropped (assigned by name after linking).
+ * Free the result with #WSC_essl_result_free.
+ */
+WSC_EsslResult WSC_glsl_to_essl(const char *glsl, WSC_Stage stage);
+
+void WSC_essl_result_free(WSC_EsslResult *result);
+
 #ifdef __cplusplus
 }
 #endif

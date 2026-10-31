@@ -159,10 +159,18 @@ inline GLenum to_gl_internal_format(TextureFormat format)
 inline GLenum to_gl_target(GPUTextureType type)
 {
   switch (type) {
+#ifdef __EMSCRIPTEN__
+    /* OpenGL ES (#GLContext::is_gles) has no 1D textures: 2D textures one texel high, 1D arrays
+     * have the same storage as 2D textures (one row per layer). */
+    case GPU_TEXTURE_1D:
+    case GPU_TEXTURE_1D_ARRAY:
+      return GL_TEXTURE_2D;
+#else
     case GPU_TEXTURE_1D:
       return GL_TEXTURE_1D;
     case GPU_TEXTURE_1D_ARRAY:
       return GL_TEXTURE_1D_ARRAY;
+#endif
     case GPU_TEXTURE_2D:
       return GL_TEXTURE_2D;
     case GPU_TEXTURE_2D_ARRAY:

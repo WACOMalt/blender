@@ -139,8 +139,11 @@ find_package_wrapper(JPEG REQUIRED)
 find_package_wrapper(PNG REQUIRED)
 find_package_wrapper(ZLIB REQUIRED)
 find_package_wrapper(Zstd REQUIRED)
-if(NOT EMSCRIPTEN)
-  # WebAssembly uses WebGL/WebGPU, the target is left empty.
+if(EMSCRIPTEN)
+  # WebGL2 provides OpenGL ES 3.0 directly, a header maps libepoxy's API onto it.
+  set(EPOXY_INCLUDE_DIRS "${CMAKE_SOURCE_DIR}/source/blender/gpu/opengl/web")
+  set(EPOXY_LIBRARIES)
+else()
   find_package_wrapper(Epoxy REQUIRED)
 endif()
 find_package_wrapper(fmt REQUIRED)

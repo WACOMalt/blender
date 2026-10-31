@@ -73,6 +73,10 @@ bool GLTexture::init_internal()
   switch (dimensions) {
     default:
     case 1:
+      if (GLContext::is_gles) {
+        glTexStorage2D(target_, mipmaps_, internal_format, w_, 1);
+        break;
+      }
       glTexStorage1D(target_, mipmaps_, internal_format, w_);
       break;
     case 2:
@@ -778,6 +782,11 @@ bool GLTexture::proxy_check(int mip)
     if (size[0] > max_cube_size) {
       return false;
     }
+  }
+
+  if (GLContext::is_gles) {
+    /* No proxy textures in OpenGL ES, the manual validation above has to do. */
+    return true;
   }
 
   if (GPU_type_matches(GPU_DEVICE_ATI, GPU_OS_WIN, GPU_DRIVER_ANY) ||

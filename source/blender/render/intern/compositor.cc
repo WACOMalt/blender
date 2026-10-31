@@ -55,6 +55,7 @@
 
 #include "WM_api.hh"
 
+#include "GPU_capabilities.hh"
 #include "GPU_context.hh"
 #include "GPU_state.hh"
 #include "GPU_texture_pool.hh"
@@ -811,6 +812,11 @@ class Compositor {
   {
     bke::ComputeContextCache compute_context_cache;
     Context context(cache_manager_, compute_context_cache, input_data);
+
+    if (!GPU_storage_buffer_support()) {
+      /* The GPU compositor needs compute shaders, which OpenGL ES (WebGL2) doesn't have. */
+      context.set_gpu_supported(false);
+    }
 
     if (context.use_gpu()) {
       /* For main thread rendering in background mode, blocking rendering, or when we do not have a

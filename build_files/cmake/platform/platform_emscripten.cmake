@@ -77,6 +77,8 @@ endfunction()
 # - NODEFS lets `web/run_node.js` mount host directories when testing with Node.js.
 # - IDBFS keeps the files of the page's user (preferences, saved files) in IndexedDB.
 # - `blender.js.symbols` maps function indices to names, to read stack traces of optimized builds.
+# - WebGL2 for the OpenGL backend (browsers without WebGPU). FULL_ES3 emulates buffer mapping,
+#   which WebGL does not have.
 # By default Binaryen inlines every function that has a single caller, whatever its size.
 # This merged all the generated `register_struct_*` functions into `rna_blender_rna_create`,
 # a function bigger than WebAssembly engines accept (~7.6 MB in V8 and SpiderMonkey).
@@ -88,6 +90,7 @@ function(blender_web_setup_blender_target target)
 -sMODULARIZE=1 -sEXPORT_NAME=BlenderModule \
 -sEXPORTED_RUNTIME_METHODS=FS,ENV,NODEFS,IDBFS,ccall,addRunDependency,removeRunDependency \
 -lnodefs.js -lidbfs.js \
+-sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sFULL_ES3=1 \
 -sBINARYEN_EXTRA_PASSES=--one-caller-inline-max-function-size=10000 --emit-symbol-map"
   )
 endfunction()

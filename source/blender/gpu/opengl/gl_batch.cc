@@ -264,8 +264,20 @@ void GLBatch::draw(int v_first, int v_count, int i_first, int i_count)
     GLint base_index = el->index_base_;
     void *v_first_ofs = el->offset_ptr(v_first);
 
+    if (GLContext::is_gles) {
+      /* No base vertex or base instance in OpenGL ES 3.0 (without
+       * WEBGL_draw_instanced_base_vertex_base_instance). */
+      BLI_assert_msg(base_index == 0 && i_first == 0,
+                     "Base vertex/instance draws are not supported in OpenGL ES");
+      glDrawElementsInstanced(gl_type, v_count, index_type, v_first_ofs, i_count);
+      return;
+    }
     glDrawElementsInstancedBaseVertexBaseInstance(
         gl_type, v_count, index_type, v_first_ofs, i_count, base_index, i_first);
+  }
+  else if (GLContext::is_gles) {
+    BLI_assert_msg(i_first == 0, "Base instance draws are not supported in OpenGL ES");
+    glDrawArraysInstanced(gl_type, v_first, v_count, i_count);
   }
   else {
     glDrawArraysInstancedBaseInstance(gl_type, v_first, v_count, i_count, i_first);

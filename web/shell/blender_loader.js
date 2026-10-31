@@ -41,6 +41,43 @@
     return;
   }
 
+  /** True when a WebGPU adapter is available. Checked up front, before downloading the data
+   * files or starting the module, so an unsupported browser stops with a clear message
+   * instead of failing halfway through start-up. */
+  async function hasWebGPU() {
+    try {
+      return !!(navigator.gpu && await navigator.gpu.requestAdapter());
+    }
+    catch (error) {
+      console.error('WebGPU adapter request failed:', error);
+      return false;
+    }
+  }
+  /** True when WebGL2 is available on an OffscreenCanvas, which Blender's thread draws into
+   * when there is no WebGPU (the OpenGL backend, see `GHOST_ContextWebGL`). */
+  function hasWebGL2() {
+    try {
+      return typeof OffscreenCanvas !== 'undefined' &&
+             !!new OffscreenCanvas(1, 1).getContext('webgl2');
+    }
+    catch (error) {
+      return false;
+    }
+  }
+
+  const params = new URLSearchParams(location.search);
+  /* `?gpu=webgl2` forces the WebGL2 backend, for testing. */
+  const useWebGL2 = params.get('gpu') === 'webgl2' || !await hasWebGPU();
+  if (useWebGL2 && !hasWebGL2()) {
+    document.getElementById('progress').classList.add('hidden');
+    fail('Blender needs WebGPU or WebGL2, neither is available in this browser.\n\n' +
+         'Supported browsers: Chrome/Edge 113+, Firefox 141+ (on Windows and macOS) ' +
+         'and Safari 26+.\n' +
+         'On Linux, Chromium needs Vulkan enabled and runs under X11.');
+    return;
+  }
+  console.log(`loader: GPU backend ${useWebGL2 ? 'WebGL2 (OpenGL)' : 'WebGPU'}`);
+
   /** Download `url` into one buffer, reporting progress with `onProgress(loaded)`. */
   async function fetchBytes(url, onProgress) {
     const response = await fetch(url);
@@ -68,8 +105,10 @@
     return bytes;
   }
 
-  const params = new URLSearchParams(location.search);
   const args = params.has('args') ? params.get('args').split(',') : [];
+  if (useWebGL2) {
+    args.unshift('--gpu-backend', 'opengl');
+  }
 
   /* The data files download while the browser fetches and compiles `blender.wasm` (the module
    * is created right away and waits for the files in `preRun`). */
@@ -110,11 +149,20 @@
     });
   }
 
+  /* WebGL2: Blender's thread draws into its own OffscreenCanvas and hands each frame over as an
+   * ImageBitmap, see `GHOST_ContextWebGL`. */
+  let bitmapRenderer = null;
+  if (useWebGL2) {
+    bitmapRenderer = document.getElementById('canvas').getContext('bitmaprenderer');
+  }
+
   const config = {
     canvas: document.getElementById('canvas'),
     arguments: args,
     print: text => console.log(text),
     printErr: text => console.error(text),
+    /* Called on the main thread with each frame drawn with WebGL2. */
+    webglPresent: bitmap => bitmapRenderer.transferFromImageBitmap(bitmap),
     preRun: [
       instance => {
         module = instance;

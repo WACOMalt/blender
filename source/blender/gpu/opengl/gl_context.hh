@@ -48,6 +48,25 @@ class GLSharedOrphanLists {
 
 class GLContext : public Context {
  public:
+  /**
+   * OpenGL ES 3.0 (WebGL2 in the WebAssembly build): no compute shaders, storage buffers,
+   * images, geometry shaders or clip control, GLSL ES 3.00 shaders.
+   */
+#ifdef __EMSCRIPTEN__
+  static constexpr bool is_gles = true;
+#else
+  static constexpr bool is_gles = false;
+#endif
+
+  /**
+   * In OpenGL ES, read-only storage buffers are uniform blocks (see #GLStorageBuf). They use the
+   * binding points after the ones of the uniform buffers (OpenGL ES guarantees 24).
+   */
+  static constexpr int gles_storage_buffer_binding(const int slot)
+  {
+    return 16 + slot;
+  }
+
   /** Capabilities. */
 
   static GLint max_cubemap_size;

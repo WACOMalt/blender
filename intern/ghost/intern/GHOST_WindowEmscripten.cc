@@ -11,6 +11,9 @@
 #ifdef WITH_WEBGPU_BACKEND
 #  include "GHOST_ContextWebGPU.hh"
 #endif
+#ifdef WITH_OPENGL_BACKEND
+#  include "GHOST_ContextWebGL.hh"
+#endif
 #include "GHOST_SystemEmscripten.hh"
 
 #include <cmath>
@@ -52,6 +55,20 @@ GHOST_Context *GHOST_WindowEmscripten::newDrawingContext(GHOST_TDrawingContextTy
 #ifdef WITH_WEBGPU_BACKEND
     case GHOST_kDrawingContextTypeWebGPU: {
       GHOST_Context *context = new GHOST_ContextWebGPU(want_context_params_);
+      if (context->initializeDrawingContext()) {
+        return context;
+      }
+      delete context;
+      return nullptr;
+    }
+#endif
+#ifdef WITH_OPENGL_BACKEND
+    case GHOST_kDrawingContextTypeOpenGL: {
+      GHOST_SystemEmscripten *system = system_;
+      GHOST_Context *context = new GHOST_ContextWebGL(
+          want_context_params_,
+          [system](uint32_t &width, uint32_t &height) { system->getCanvasSize(width, height); },
+          true);
       if (context->initializeDrawingContext()) {
         return context;
       }

@@ -307,6 +307,9 @@ fetch_dawn() {
     c3027d884967773057bf74b957e3fea87e5df4d7
   fetch_commit "$third_party/markupsafe" https://chromium.googlesource.com/chromium/src/third_party/markupsafe \
     4256084ae14175d38a3ff7d739dca83ae49ccec6
+  # Not a Dawn dependency: GLSL ES output for WebGL2 (the OpenGL backend).
+  fetch_commit "$third_party/spirv-cross/src" https://github.com/KhronosGroup/SPIRV-Cross \
+    vulkan-sdk-1.4.363.0
   if [ ! -f "$third_party/abseil-cpp/CMakeLists.txt" ]; then
     rm -rf "$third_party/abseil-cpp"
     git -c advice.detachedHead=false clone -q --depth 1 --branch 20260107.0 \

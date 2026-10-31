@@ -55,7 +55,14 @@
 #include "WM_types.hh"
 
 #include "UI_interface.hh"
+#include "UI_resources.hh"
 #include "UI_view2d.hh"
+
+#include "BIF_glutil.hh"
+
+#include "GPU_capabilities.hh"
+#include "GPU_immediate_util.hh"
+#include "GPU_state.hh"
 
 #include "DEG_depsgraph.hh"
 
@@ -763,6 +770,36 @@ static void image_main_region_init(wmWindowManager *wm, ARegion *region)
   WM_event_add_keymap_handler_v2d_mask(&region->runtime->handlers, keymap);
 }
 
+/**
+ * The draw manager needs storage buffers, which OpenGL ES (WebGL2) lacks: the image is drawn
+ * directly (like in the Movie Clip editor), without the overlays (UV editing, ...).
+ */
+static void image_draw_without_draw_manager(const bContext *C,
+                                            ARegion *region,
+                                            SpaceImage *sima)
+{
+  ui::theme::frame_buffer_clear(TH_BACK);
+
+  /* Before acquiring the buffer: this acquires it too, which locks viewer images. */
+  float zoomx, zoomy;
+  ED_space_image_get_zoom(sima, region, &zoomx, &zoomy);
+
+  void *lock;
+  ImBuf *ibuf = ED_space_image_acquire_buffer(sima, &lock, 0, true);
+  if (ibuf && (ibuf->float_buffer.data || ibuf->byte_buffer.data)) {
+    /* Window pixel coordinates of the image origin. */
+    int x, y;
+    ui::view2d_view_to_region(&region->v2d, 0.0f, 0.0f, &x, &y);
+    if (ibuf->can_contain_alpha()) {
+      GPU_blend(GPU_BLEND_ALPHA);
+      imm_draw_box_checker_2d(x, y, x + zoomx * ibuf->x, y + zoomy * ibuf->y);
+    }
+    ED_draw_imbuf_ctx(C, ibuf, x, y, zoomx < 1.0f, zoomx, zoomy);
+    GPU_blend(GPU_BLEND_NONE);
+  }
+  ED_space_image_release_buffer(sima, ibuf, lock);
+}
+
 static void image_main_region_draw(const bContext *C, ARegion *region)
 {
   /* draw entirely, view changes should be handled here */
@@ -800,12 +837,18 @@ static void image_main_region_draw(const bContext *C, ARegion *region)
     mask = ED_space_image_get_mask(sima);
   }
 
-  if (show_viewer) {
-    BLI_thread_lock(LOCK_DRAW_IMAGE);
+  if (!GPU_storage_buffer_support()) {
+    /* Not under #LOCK_DRAW_IMAGE: acquiring the image buffer takes it for viewer images. */
+    image_draw_without_draw_manager(C, region, sima);
   }
-  DRW_draw_view(C);
-  if (show_viewer) {
-    BLI_thread_unlock(LOCK_DRAW_IMAGE);
+  else {
+    if (show_viewer) {
+      BLI_thread_lock(LOCK_DRAW_IMAGE);
+    }
+    DRW_draw_view(C);
+    if (show_viewer) {
+      BLI_thread_unlock(LOCK_DRAW_IMAGE);
+    }
   }
 
   if (show_render_region) {

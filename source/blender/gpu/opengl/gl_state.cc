@@ -28,8 +28,11 @@ namespace blender::gpu {
 GLStateManager::GLStateManager()
 {
   /* Set other states that never change. */
-  glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
-  glEnable(GL_MULTISAMPLE);
+  if (!GLContext::is_gles) {
+    /* Always enabled in OpenGL ES. */
+    glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
+    glEnable(GL_MULTISAMPLE);
+  }
 
   glDisable(GL_DITHER);
 
@@ -37,9 +40,12 @@ GLStateManager::GLStateManager()
   glPixelStorei(GL_PACK_ALIGNMENT, 1);
   glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
 
-  /* Takes precedence over #GL_PRIMITIVE_RESTART.
-   * Sets restart index correctly following the IBO type. */
-  glEnable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
+  if (!GLContext::is_gles) {
+    /* Takes precedence over #GL_PRIMITIVE_RESTART.
+     * Sets restart index correctly following the IBO type.
+     * Always enabled in WebGL2. */
+    glEnable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
+  }
 
   /* Limits. */
   glGetFloatv(GL_ALIASED_LINE_WIDTH_RANGE, line_width_range_);
@@ -108,7 +114,10 @@ void GLStateManager::set_state(const GPUState &state)
   }
 
   /* TODO: remove. */
-  if (changed.polygon_smooth) {
+  if (GLContext::is_gles) {
+    /* No polygon or line smoothing in OpenGL ES. */
+  }
+  else if (changed.polygon_smooth) {
     if (state.polygon_smooth) {
       glEnable(GL_POLYGON_SMOOTH);
     }
@@ -116,7 +125,7 @@ void GLStateManager::set_state(const GPUState &state)
       glDisable(GL_POLYGON_SMOOTH);
     }
   }
-  if (changed.line_smooth) {
+  if (changed.line_smooth && !GLContext::is_gles) {
     if (state.line_smooth) {
       glEnable(GL_LINE_SMOOTH);
     }
@@ -133,7 +142,8 @@ void GLStateManager::set_mutable_state(const GPUStateMutable &state)
   GPUStateMutable changed = state ^ current_mutable_;
 
   /* TODO: remove, should be uniform. */
-  if (float_as_uint(changed.point_size) != 0) {
+  if (float_as_uint(changed.point_size) != 0 && !GLContext::is_gles) {
+    /* OpenGL ES point sizes always come from `gl_PointSize`. */
     if (state.point_size > 0.0f) {
       glEnable(GL_PROGRAM_POINT_SIZE);
     }

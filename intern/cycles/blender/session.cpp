@@ -33,6 +33,8 @@
 #include "util/progress.h"
 #include "util/time.h"
 
+#include "GPU_capabilities.hh"
+
 #include "blender/display_driver.h"
 #include "blender/output_driver.h"
 #include "blender/session.h"
@@ -1128,6 +1130,12 @@ void BlenderSession::ensure_display_driver_if_needed()
 
   if ((b_engine.flag & blender::RE_ENGINE_PREVIEW) != 0) {
     /* TODO(sergey): Investigate whether DisplayDriver can be used for the preview as well. */
+    return;
+  }
+
+  if (blender::GPU_use_main_context_workaround()) {
+    /* GPU contexts can only be used on the main thread (WebGL), the display driver updates its
+     * textures from the render threads. Results are shown from the render result instead. */
     return;
   }
 

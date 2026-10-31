@@ -12,6 +12,8 @@
 
 #include "MEM_guardedalloc.h"
 
+#include "BLI_vector.hh"
+
 #include "gpu_immediate_private.hh"
 
 namespace blender::gpu {
@@ -34,6 +36,8 @@ class GLImmediate : public Immediate {
   } buffer, buffer_strict;
   /** Size in bytes of the mapped region. */
   size_t bytes_mapped_ = 0;
+  /** OpenGL ES (WebGL) can't map buffers: the vertices are written here, then uploaded. */
+  Vector<uchar> staging_data_;
   /** Vertex array for this immediate mode instance. */
   GLuint vao_id_ = 0;
 

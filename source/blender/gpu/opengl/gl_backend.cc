@@ -11,6 +11,10 @@
 #include <cstdlib>
 #include <string>
 
+#ifdef __EMSCRIPTEN__
+#  include "web_shader_compiler.h"
+#endif
+
 #include "BKE_global.hh"
 #if defined(WIN32)
 #  include "BLI_winstuff.hh"
@@ -129,6 +133,11 @@ void GLBackend::platform_init()
 {
   BLI_assert(!GPG.initialized);
 
+#ifdef __EMSCRIPTEN__
+  /* Shaders are translated to GLSL ES, see #GLShader::create_shader_stage. */
+  WSC_init();
+#endif
+
   const char *vendor = reinterpret_cast<const char *>(glGetString(GL_VENDOR));
   const char *renderer = reinterpret_cast<const char *>(glGetString(GL_RENDERER));
   const char *version = reinterpret_cast<const char *>(glGetString(GL_VERSION));
@@ -212,6 +221,9 @@ void GLBackend::platform_init()
     device = GPU_DEVICE_SOFTWARE;
     driver = GPU_DRIVER_SOFTWARE;
   }
+  else if (GLContext::is_gles) {
+    /* Browsers hide the GPU behind "WebKit WebGL" (or similar). */
+  }
   else {
     printf("Warning: Could not find a matching GPU name. Things may not behave as expected.\n");
     printf("Detected OpenGL configuration:\n");
@@ -220,7 +232,10 @@ void GLBackend::platform_init()
   }
 
   /* Detect support level */
-  if (!(epoxy_gl_version() >= 43)) {
+  if (GLContext::is_gles) {
+    /* WebGL2: the features OpenGL ES 3.0 lacks are disabled (see #GLContext::is_gles). */
+  }
+  else if (!(epoxy_gl_version() >= 43)) {
     support_level = GPU_SUPPORT_LEVEL_UNSUPPORTED;
   }
   else {
@@ -388,6 +403,9 @@ void GLBackend::platform_exit()
 {
   BLI_assert(GPG.initialized);
   GPG.clear();
+#ifdef __EMSCRIPTEN__
+  WSC_exit();
+#endif
 }
 
 TexturePool *GLBackend::texturepool_alloc()
@@ -455,6 +473,16 @@ static void detect_workarounds()
     GLContext::debug_layer_support = false;
 #endif
 
+    return;
+  }
+
+  if (GLContext::is_gles) {
+    /* No texture views (texture pool, sRGB write views). Errors are checked by the browser. */
+    GCaps.texture_pool_workaround = true;
+    GCaps.srgb_write_view_support = false;
+    GLContext::debug_layer_support = false;
+    GLContext::debug_layer_workaround = false;
+    GCaps.minimum_per_vertex_stride = 1;
     return;
   }
 
@@ -648,7 +676,7 @@ bool GLContext::unused_fb_slot_workaround = false;
 
 void GLBackend::capabilities_init()
 {
-  BLI_assert(epoxy_gl_version() >= 33);
+  BLI_assert(GLContext::is_gles || epoxy_gl_version() >= 33);
   /* Common Capabilities. */
   glGetIntegerv(GL_MAX_TEXTURE_SIZE, &GCaps.max_texture_size);
   glGetIntegerv(GL_MAX_ARRAY_TEXTURE_LAYERS, &GCaps.max_texture_layers);
@@ -658,16 +686,41 @@ void GLBackend::capabilities_init()
   glGetIntegerv(GL_MAX_ELEMENTS_INDICES, &GCaps.max_batch_indices);
   glGetIntegerv(GL_MAX_ELEMENTS_VERTICES, &GCaps.max_batch_vertices);
   glGetIntegerv(GL_MAX_VERTEX_ATTRIBS, &GCaps.max_vertex_attribs);
-  glGetIntegerv(GL_MAX_VARYING_FLOATS, &GCaps.max_varying_floats);
-  glGetIntegerv(GL_MAX_IMAGE_UNITS, &GCaps.max_images);
 
   glGetIntegerv(GL_NUM_EXTENSIONS, &GCaps.extensions_len);
   GCaps.extension_get = gl_extension_get;
+  GCaps.hdr_viewport_support = false;
+
+  if (GLContext::is_gles) {
+    /* OpenGL ES 3.0: no images, compute shaders, storage buffers, buffer textures, geometry
+     * shaders or texture views. */
+    glGetIntegerv(GL_MAX_VARYING_COMPONENTS, &GCaps.max_varying_floats);
+    glGetIntegerv(GL_MAX_3D_TEXTURE_SIZE, &GCaps.max_texture_3d_size);
+    glGetIntegerv(GL_MAX_CUBE_MAP_TEXTURE_SIZE, &GLContext::max_cubemap_size);
+    glGetIntegerv(GL_MAX_FRAGMENT_UNIFORM_BLOCKS, &GLContext::max_ubo_binds);
+    int64_t max_ubo_size;
+    glGetInteger64v(GL_MAX_UNIFORM_BLOCK_SIZE, &max_ubo_size);
+    GCaps.max_uniform_buffer_size = size_t(max_ubo_size);
+    /* Storage buffers are plain buffers (see #GLStorageBuf), shaders can only read the beginning
+     * of some of them. */
+    GCaps.max_storage_buffer_size = size_t(1) << 30;
+    GLContext::texture_filter_anisotropic_support = epoxy_has_gl_extension(
+        "GL_EXT_texture_filter_anisotropic");
+    detect_workarounds();
+    /* A WebGL context belongs to one thread and doesn't share resources: shaders are compiled
+     * and drawing happens on the main context only. */
+    GCaps.use_main_context_workaround = true;
+    GCaps.use_subprocess_shader_compilations = false;
+    GCaps.max_parallel_compilations = 1;
+    return;
+  }
+
+  glGetIntegerv(GL_MAX_VARYING_FLOATS, &GCaps.max_varying_floats);
+  glGetIntegerv(GL_MAX_IMAGE_UNITS, &GCaps.max_images);
 
   GCaps.mem_stats_support = epoxy_has_gl_extension("GL_NVX_gpu_memory_info") ||
                             epoxy_has_gl_extension("GL_ATI_meminfo");
   GCaps.geometry_shader_support = true;
-  GCaps.hdr_viewport_support = false;
   GCaps.multi_viewport_support = true;
   GCaps.vertex_pipeline_stores_and_atomics_support = true;
 

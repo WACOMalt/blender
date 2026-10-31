@@ -7,14 +7,19 @@
 // `eval:JS` (prints the result), `key:KEY` (Playwright key names),
 // `type:TEXT`, `wait:MS`, `shot:FILE.png`, `reload:` (keeps the browser storage) and
 // `drop:URL@X,Y` (drops the file at URL on the canvas).
-const { chromium } = require('playwright');
+//
+// `BROWSER=firefox` uses headless Firefox instead (no WebGPU: the page uses WebGL2).
+const { chromium, firefox } = require('playwright');
 (async () => {
   const [url, shot, timeoutMs, actions] = [process.argv[2], process.argv[3],
                                            Number(process.argv[4] || 60000), process.argv[5] || ''];
-  const browser = await chromium.launch({
-    args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan', '--use-vulkan=swiftshader',
-           '--use-webgpu-adapter=swiftshader', '--use-angle=swiftshader', '--ignore-gpu-blocklist'],
-  });
+  const browser = (process.env.BROWSER === 'firefox') ?
+                      await firefox.launch() :
+                      await chromium.launch({
+                        args: ['--enable-unsafe-webgpu', '--enable-features=Vulkan',
+                               '--use-vulkan=swiftshader', '--use-webgpu-adapter=swiftshader',
+                               '--use-angle=swiftshader', '--ignore-gpu-blocklist'],
+                      });
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   let done;
   const finished = new Promise(r => (done = r));

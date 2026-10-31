@@ -100,6 +100,12 @@ void GLVertArray::update_bindings(const GLuint vao,
   if (attr_mask != 0) {
     for (uint16_t mask = 1, a = 0; a < 16; a++, mask <<= 1) {
       if (attr_mask & mask) {
+        if (GLContext::is_gles) {
+          /* No vertex attribute binding in OpenGL ES 3.0: a constant attribute value. */
+          glDisableVertexAttribArray(a);
+          glVertexAttrib4f(a, 0.0f, 0.0f, 0.0f, 1.0f);
+          continue;
+        }
         GLContext *ctx = GLContext::get();
         /* This replaces glVertexAttrib4f(a, 0.0f, 0.0f, 0.0f, 1.0f); with a more modern style.
          * Fix issues for some drivers (see #75069). */

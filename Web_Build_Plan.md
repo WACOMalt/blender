@@ -8,7 +8,8 @@ Status: **Phase 3 done — the full UI build is deployed and runs in a browser**
 (first deployment to blender.bsums.xyz on 2026-10-30: WebGPU viewport, Edit mode,
 Python/`bpy`, CPU Cycles, `.blend` load/save). The Emscripten toolchain, all
 dependencies (including CPython 3.13) and the CMake platform support work, see
-`web/README.md`. **Current focus: the WebGL2 backend (section "WebGL2 backend plan").**
+`web/README.md`. **Current focus: the WebGL2 backend (section "WebGL2 backend plan"): Stage
+W1 (user interface on WebGL2) is done, the 3D viewport on WebGL2 (W2) is next.**
 
 Decisions by the repo owner (2026-10-28):
 - GPU: **WebGPU is the primary backend, with a reduced WebGL2 fallback** for browsers without WebGPU.
@@ -175,6 +176,57 @@ degrading honestly by what GLES 3.0 can express. Staged so each stage ships:
 Non-goals for WebGL2: EEVEE, Material Preview, GPU compositor, anything needing
 image load/store. Those stay WebGPU-only.
 
+#### W1 design (2026-10-31)
+
+- **Reuse the OpenGL backend in a GLES mode** (`GLContext::is_gles`), not a new backend: it
+  already falls back when DSA, multi-bind, debug output, texture barriers or layered rendering
+  are missing, and keeps a post-link binding path (`glUniformBlockBinding`/`glUniform1i`),
+  which is what ES 3.0 needs (no `layout(binding)`). Both backends are compiled into the web
+  build; WebGPU is tried first, OpenGL (WebGL2) second.
+- **libepoxy shim**: on Emscripten `bf::dependencies::epoxy` points at a header
+  (`source/blender/gpu/opengl/web/epoxy/gl.h`) that includes `<GLES3/gl3.h>`, defines the
+  desktop-only enums the backend names, and provides `epoxy_gl_version()` /
+  `epoxy_has_gl_extension()` from the WebGL context. Desktop-only functions are stubs that are
+  never reached because the capability flags are off in GLES mode.
+- **Threading and presentation** (proven by `web/prototypes/webgl_pthread`): the WebGL2
+  context lives on Blender's main pthread, on an OffscreenCanvas created by that thread and
+  registered with `GL.registerContext`. The thread never returns to its event loop, so frames are
+  presented with `transferToImageBitmap()` and posted to the page without copying (Emscripten's
+  `CMD_CALL_HANDLER` message); the page draws them into an `ImageBitmapRenderingContext`.
+  WebGL has no shared contexts and a context is bound to its thread: offscreen GPU contexts
+  reuse the window's WebGL context on the main thread; GPU work on other threads is not
+  possible (shader compilation stays on the main thread).
+- **GLSL**: Blender's shaders rely on desktop GLSL rules (implicit int/uint conversions), which
+  GLSL ES rejects. The GL backend writes desktop GLSL 4.30 without the features ES 3.0 lacks,
+  and `WSC_glsl_to_essl` (`web/shader_compiler`) translates it: glslang → SPIR-V → SPIRV-Cross →
+  GLSL ES 3.00 (interface blocks flattened, precisions added). Bindings are assigned by name
+  after linking. `noperspective` becomes `smooth`.
+- **Storage buffers**: read-only storage buffers of known struct types (`GlyphQuad`,
+  `NodeLinkData`, `SeqStripDrawData`) are uniform blocks, filled up to the maximum block size;
+  the buffers are allocated that large. This covers text and node links. Polyline shaders
+  (vertex pulling) are replaced by regular line shaders: lines are 1 pixel wide.
+- **Draw manager**: `GPU_storage_buffer_support()` is false. The 3D viewport shows a message, the
+  image editor draws its image directly (like the Movie Clip editor), `DRW_draw_view` and the
+  other draw manager entry points return early, the compositor runs on the CPU, EEVEE/Workbench
+  renders report an error. Cycles has no display driver (it updates GPU textures from the
+  render threads): its results are shown from the render result.
+- **Page**: the loader decides the backend (`hasWebGPU()`, `?gpu=webgl2` forces WebGL2) and
+  passes `--gpu-backend opengl`; frames are drawn into an `ImageBitmapRenderingContext`.
+
+#### W1 status (2026-10-31): done
+
+Verified headless in Chromium (`?gpu=webgl2`) and Firefox (`BROWSER=firefox`, no WebGPU):
+the whole UI, workspaces, the image editor, Cycles F12 renders displayed in the image editor.
+The WebGPU path is unchanged. Known gaps, in rough order of value:
+- No 3D viewport (Stage W2), no image editor overlays (UV editing), no node editor backdrop or
+  sequencer preview (they use the draw manager).
+- Wide and smooth lines are 1 pixel wide (WebGL has no wide lines; polyline needs storage
+  buffers).
+- 1D textures are 2D textures in GLES mode, but shaders declaring `sampler1D` don't compile:
+  OCIO configurations with 1D LUTs and curve mapping in color management.
+- Draws with a base vertex (index buffers of meshes with 65536+ vertices) are not supported.
+- Separate windows (preferences, render window) still open inside the main window only.
+
 ## 3. Dependency strategy
 
 Build every library from source with Emscripten into `build_web/deps` through a
@@ -204,7 +256,7 @@ Ceres/libmv (motion tracking), Collada, Draco, MaterialX, Potrace, SDL.
 - Add a CI workflow once the smoke test passes in a cloud session.
 
 ### Phase 4: WebGL2 backend (current)
-- [ ] Stage W1: boot + 2D UI on WebGL2 (see "WebGL2 backend plan"); page falls back
+- [x] Stage W1: boot + 2D UI on WebGL2 (see "WebGL2 backend plan"); page falls back
       WebGPU → WebGL2 automatically and says which backend is active.
 - [ ] Compat-mode investigation (may land before or alongside W1; small, high value).
 - [ ] Stage W2 decision: reduced viewport vs. first-class no-viewport mode.

@@ -67,13 +67,20 @@ GLContext::GLContext(GHOST_IWindow *ghost_window,
       front_left = new GLFrameBuffer("front_left", this, GL_COLOR_ATTACHMENT0, default_fbo, w, h);
       back_left = new GLFrameBuffer("back_left", this, GL_COLOR_ATTACHMENT0, default_fbo, w, h);
     }
+    else if (is_gles) {
+      /* OpenGL ES only has the back buffer. */
+      front_left = new GLFrameBuffer("front_left", this, GL_BACK, 0, w, h);
+      back_left = new GLFrameBuffer("back_left", this, GL_BACK, 0, w, h);
+    }
     else {
       front_left = new GLFrameBuffer("front_left", this, GL_FRONT_LEFT, 0, w, h);
       back_left = new GLFrameBuffer("back_left", this, GL_BACK_LEFT, 0, w, h);
     }
 
     GLboolean supports_stereo_quad_buffer = GL_FALSE;
-    glGetBooleanv(GL_STEREO, &supports_stereo_quad_buffer);
+    if (!is_gles) {
+      glGetBooleanv(GL_STEREO, &supports_stereo_quad_buffer);
+    }
     if (supports_stereo_quad_buffer) {
       front_right = new GLFrameBuffer("front_right", this, GL_FRONT_RIGHT, 0, w, h);
       back_right = new GLFrameBuffer("back_right", this, GL_BACK_RIGHT, 0, w, h);

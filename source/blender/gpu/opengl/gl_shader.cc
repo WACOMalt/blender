@@ -23,6 +23,7 @@
 #include "GPU_capabilities.hh"
 #include "GPU_debug.hh"
 #include "GPU_platform.hh"
+#include "GPU_shader_shared.hh"
 #include "gpu_capabilities_private.hh"
 #include "gpu_shader_dependency_private.hh"
 
@@ -38,6 +39,10 @@
 
 #include <fmt/format.h>
 #include <fmt/ranges.h>
+
+#ifdef __EMSCRIPTEN__
+#  include "web_shader_compiler.h"
+#endif
 
 #include <chrono>
 #include <filesystem>
@@ -491,10 +496,58 @@ static std::ostream &print_qualifier(std::ostream &os, const Qualifier &qualifie
   return os;
 }
 
+/**
+ * Size of the elements of the storage buffers OpenGL ES reads as uniform blocks (see
+ * #GLStorageBuf). Their layout is the same in std140 and std430 (16 byte multiples).
+ * 0 for others: their shaders can't be used in OpenGL ES.
+ */
+static size_t gles_storage_element_size(const StringRefNull type_name)
+{
+  if (type_name == "GlyphQuad") {
+    return sizeof(GlyphQuad);
+  }
+  if (type_name == "NodeLinkData") {
+    return sizeof(NodeLinkData);
+  }
+  if (type_name == "SeqStripDrawData") {
+    return sizeof(SeqStripDrawData);
+  }
+  return 0;
+}
+
 static void print_resource(std::ostream &os,
                            const ShaderCreateInfo::Resource &res,
                            const ShaderCreateInfo & /*info*/)
 {
+  if (GLContext::is_gles) {
+    /* OpenGL ES 3.0: no `binding` layouts (assigned after linking, see #GLShaderInterface), no
+     * images or storage buffers. Read-only storage buffers of known element types are uniform
+     * blocks holding as many elements as fit. */
+    switch (res.bind_type) {
+      case ShaderCreateInfo::Resource::BindType::STORAGE_BUFFER: {
+        const size_t element_size = gles_storage_element_size(res.storagebuf.type_name);
+        if (element_size == 0 || flag_is_set(res.storagebuf.qualifiers, Qualifier::write)) {
+          break;
+        }
+        os << "layout(std140) uniform _" << res.storagebuf.name.str_no_array() << " { ";
+        os << res.storagebuf.type_name << " " << res.storagebuf.name.str_no_array() << "["
+           << GPU_max_uniform_buffer_size() / element_size << "]; };";
+        break;
+      }
+      case ShaderCreateInfo::Resource::BindType::SAMPLER:
+        os << "uniform ";
+        print_image_type(os, res.sampler.type, res.bind_type);
+        os << res.sampler.name << ";";
+        break;
+      case ShaderCreateInfo::Resource::BindType::UNIFORM_BUFFER:
+        os << "layout(std140) uniform _" << res.uniformbuf.name.str_no_array() << " { ";
+        os << res.uniformbuf.type_name << " " << res.uniformbuf.name << "; };";
+        break;
+      default:
+        break;
+    }
+    return;
+  }
   {
     os << "layout(binding = " << res.slot;
     if (res.bind_type == ShaderCreateInfo::Resource::BindType::IMAGE) {
@@ -557,8 +610,11 @@ static void print_interface(std::ostream &os,
 {
   os << prefix << " " << iface.name << "{" << std::endl;
   for (const StageInterfaceInfo::InOut &inout : iface.inouts) {
-    os << "  " << to_string(inout.interp) << " " << to_string(inout.type) << " " << inout.name
-       << ";\n";
+    /* No `noperspective` in GLSL ES 3.00 (without GL_NV_shader_noperspective_interpolation). */
+    const char *interp = (GLContext::is_gles && inout.interp == Interpolation::NO_PERSPECTIVE) ?
+                             "smooth" :
+                             to_string(inout.interp);
+    os << "  " << interp << " " << to_string(inout.type) << " " << inout.name << ";\n";
   }
   os << "}";
   os << (iface.instance_name.is_empty() ? "" : "\n") << iface.instance_name << suffix << ";\n";
@@ -623,8 +679,9 @@ std::string GLShader::resources_declare(const ShaderCreateInfo &info) const
   /* Push Constants. */
   int location = 0;
   for (const ShaderCreateInfo::PushConst &uniform : info.push_constants_) {
-    /* See #131227: Work around legacy Intel bug when using layout locations. */
-    if (!info.specialization_constants_.is_empty()) {
+    /* See #131227: Work around legacy Intel bug when using layout locations.
+     * OpenGL ES has no uniform locations in shaders. */
+    if (!info.specialization_constants_.is_empty() && !GLContext::is_gles) {
       ss << "layout(location = " << location << ") ";
       location += std::max(1, uniform.array_size);
     }
@@ -723,7 +780,8 @@ std::string GLShader::vertex_interface_declare(const ShaderCreateInfo &info) con
       ss << "#define gpu_ViewportIndex gl_ViewportIndex\n";
     }
   }
-  if (flag_is_set(info.builtins_combined(), BuiltinBits::CLIP_CONTROL)) {
+  if (flag_is_set(info.builtins_combined(), BuiltinBits::CLIP_CONTROL) && !GLContext::is_gles) {
+    /* OpenGL ES has no clip control: the depth range stays -1..1, no remapping. */
     if (!has_geometry_stage) {
       /* Assume clip range is set to 0..1 and remap the range just like Vulkan and Metal.
        * If geometry stage is needed, do that remapping inside the geometry shader stage. */
@@ -798,10 +856,15 @@ std::string GLShader::fragment_interface_declare(const ShaderCreateInfo &info) c
       pre_main += "  gpu_BaryCoordNoPersp = stable_bary_(gl_BaryCoordNoPerspAMD);\n";
     }
   }
-  if (info.early_fragment_test_) {
-    ss << "layout(early_fragment_tests) in;\n";
+  if (GLContext::is_gles) {
+    /* No early fragment test or depth write layouts in GLSL ES 3.00. */
   }
-  ss << "layout(" << to_string(info.depth_write_) << ") out float gl_FragDepth;\n";
+  else {
+    if (info.early_fragment_test_) {
+      ss << "layout(early_fragment_tests) in;\n";
+    }
+    ss << "layout(" << to_string(info.depth_write_) << ") out float gl_FragDepth;\n";
+  }
 
   /* Sub-pass Inputs. */
   for (const ShaderCreateInfo::SubpassIn &input : info.subpass_inputs_) {
@@ -854,7 +917,8 @@ std::string GLShader::fragment_interface_declare(const ShaderCreateInfo &info) c
   /* Outputs. */
   for (const ShaderCreateInfo::FragOut &output : info.fragment_outputs_) {
     ss << "layout(location = " << output.index;
-    switch (output.blend) {
+    switch (GLContext::is_gles ? DualBlend::NONE : output.blend) {
+      /* No dual source blending in OpenGL ES 3.0. */
       case DualBlend::SRC_0:
         ss << ", index = 0";
         break;
@@ -1041,11 +1105,34 @@ bool GLShader::do_geometry_shader_injection(const shader::ShaderCreateInfo *info
 /** \name Shader stage creation
  * \{ */
 
+/**
+ * OpenGL ES (#GLContext::is_gles): the shaders are written as desktop GLSL without the features
+ * OpenGL ES 3.0 lacks, then translated to GLSL ES 3.00 (see #GLShader::create_shader_stage):
+ * Blender's shaders rely on desktop GLSL rules, like implicit conversions.
+ */
+static void glsl_es_header(std::stringstream &ss)
+{
+  ss << "#version 430\n";
+  ss << "#define GPU_OPENGL_ES\n";
+}
+
 static StringRefNull glsl_patch_vertex_get()
 {
   /** Used for shader patching. Init once. */
   static std::string patch = []() {
     std::stringstream ss;
+    if (GLContext::is_gles) {
+      glsl_es_header(ss);
+      /* No base instance in OpenGL ES 3.0, see #GLBatch::draw. */
+      ss << "#define gpu_BaseInstance 0\n";
+      ss << "#define gpu_InstanceIndex gl_InstanceID\n";
+      ss << "#define gpu_Array(_type) _type[]\n";
+      ss << "#define GPU_VERTEX_SHADER\n";
+      shader::GeneratedSource extensions{"gpu_shader_glsl_extension.glsl", {}, ss.str()};
+      shader::GeneratedSourceList sources{extensions};
+      return fmt::to_string(fmt::join(
+          gpu_shader_dependency_get_resolved_source("gpu_shader_compat_glsl.glsl", sources), ""));
+    }
     /* Version need to go first. */
     ss << "#version 430\n";
 
@@ -1120,6 +1207,15 @@ static StringRefNull glsl_patch_fragment_get()
   /** Used for shader patching. Init once. */
   static std::string patch = []() {
     std::stringstream ss;
+    if (GLContext::is_gles) {
+      glsl_es_header(ss);
+      ss << "#define gpu_Array(_type) _type[]\n";
+      ss << "#define GPU_FRAGMENT_SHADER\n";
+      shader::GeneratedSource extensions{"gpu_shader_glsl_extension.glsl", {}, ss.str()};
+      shader::GeneratedSourceList sources{extensions};
+      return fmt::to_string(fmt::join(
+          gpu_shader_dependency_get_resolved_source("gpu_shader_compat_glsl.glsl", sources), ""));
+    }
     /* Version need to go first. */
     ss << "#version 430\n";
 
@@ -1273,6 +1369,26 @@ GLuint GLShader::create_shader_stage(GLenum gl_stage,
     concat_source[start_pos] = '/';
     concat_source[start_pos + 1] = '/';
   }
+
+#ifdef __EMSCRIPTEN__
+  /* Translate to GLSL ES 3.00, see #glsl_es_header. */
+  WSC_EsslResult essl = WSC_glsl_to_essl(
+      concat_source.c_str(),
+      (gl_stage == GL_VERTEX_SHADER) ? WSC_STAGE_VERTEX : WSC_STAGE_FRAGMENT);
+  if (essl.essl == nullptr) {
+    fprintf(stderr,
+            "GLShader: %s %s shader translation to GLSL ES failed:\n%s\n",
+            this->name_get().c_str(),
+            stage_name_get(gl_stage).c_str(),
+            essl.log ? essl.log : "");
+    WSC_essl_result_free(&essl);
+    glDeleteShader(shader);
+    compilation_failed_ = true;
+    return 0;
+  }
+  concat_source = essl.essl;
+  WSC_essl_result_free(&essl);
+#endif
 
   const char *str_ptr = concat_source.c_str();
   glShaderSource(shader, 1, &str_ptr, nullptr);

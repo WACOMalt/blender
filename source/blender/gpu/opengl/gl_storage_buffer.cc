@@ -61,14 +61,27 @@ GLStorageBuf::~GLStorageBuf()
 /** \name Data upload / update
  * \{ */
 
+/**
+ * OpenGL ES 3.0 has no storage buffers: shaders read the small read-only ones as uniform blocks
+ * holding as many elements as fit (see #print_resource in `gl_shader.cc`). The buffer is
+ * allocated with the maximum block size, so it covers the block whatever the element type.
+ */
+static GLenum storage_buffer_target()
+{
+  return GLContext::is_gles ? GL_UNIFORM_BUFFER : GL_SHADER_STORAGE_BUFFER;
+}
+
 void GLStorageBuf::init()
 {
   BLI_assert(GLContext::get());
 
   alloc_size_in_bytes_ = ceil_to_multiple_ul(size_in_bytes_, 16);
+  if (GLContext::is_gles) {
+    alloc_size_in_bytes_ = std::max(alloc_size_in_bytes_, GPU_max_uniform_buffer_size());
+  }
   glGenBuffers(1, &ssbo_id_);
-  glBindBuffer(GL_SHADER_STORAGE_BUFFER, ssbo_id_);
-  glBufferData(GL_SHADER_STORAGE_BUFFER, alloc_size_in_bytes_, nullptr, to_gl(this->usage_));
+  glBindBuffer(storage_buffer_target(), ssbo_id_);
+  glBufferData(storage_buffer_target(), alloc_size_in_bytes_, nullptr, to_gl(this->usage_));
 
   debug::object_label(GL_SHADER_STORAGE_BUFFER, ssbo_id_, name_);
 }
@@ -79,9 +92,9 @@ void GLStorageBuf::update(const void *data)
     this->init();
   }
 
-  glBindBuffer(GL_SHADER_STORAGE_BUFFER, ssbo_id_);
-  glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, size_in_bytes_, data);
-  glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+  glBindBuffer(storage_buffer_target(), ssbo_id_);
+  glBufferSubData(storage_buffer_target(), 0, size_in_bytes_, data);
+  glBindBuffer(storage_buffer_target(), 0);
 }
 
 /** \} */
@@ -92,6 +105,19 @@ void GLStorageBuf::update(const void *data)
 
 void GLStorageBuf::bind(int slot)
 {
+  if (GLContext::is_gles) {
+    if (ssbo_id_ == 0) {
+      this->init();
+    }
+    if (data_ != nullptr) {
+      this->update(data_);
+      MEM_SAFE_DELETE_VOID(data_);
+    }
+    slot_ = slot;
+    glBindBufferBase(GL_UNIFORM_BUFFER, GLContext::gles_storage_buffer_binding(slot), ssbo_id_);
+    return;
+  }
+
   if (slot >= GLContext::max_ssbo_binds) {
     fprintf(
         stderr,
@@ -129,6 +155,10 @@ void GLStorageBuf::bind_as(GLenum target)
 
 void GLStorageBuf::unbind()
 {
+  if (GLContext::is_gles) {
+    slot_ = 0;
+    return;
+  }
 #ifndef NDEBUG
   /* NOTE: This only unbinds the last bound slot. */
   glBindBufferBase(GL_SHADER_STORAGE_BUFFER, slot_, 0);

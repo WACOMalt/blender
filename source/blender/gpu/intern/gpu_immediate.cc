@@ -12,6 +12,7 @@
 #  include "UI_resources.hh"
 #endif
 
+#include "GPU_capabilities.hh"
 #include "GPU_immediate.hh"
 #include "GPU_matrix.hh"
 #include "GPU_texture.hh"
@@ -124,6 +125,11 @@ static bool vertex_count_makes_sense_for_primitive(uint vertex_len, GPUPrimType 
 static void wide_line_workaround_start(GPUPrimType prim_type)
 {
   if (!ELEM(prim_type, GPU_PRIM_LINES, GPU_PRIM_LINE_STRIP, GPU_PRIM_LINE_LOOP)) {
+    return;
+  }
+
+  if (!GPU_storage_buffer_support()) {
+    /* Polyline shaders need storage buffers (not in OpenGL ES): regular lines. */
     return;
   }
 

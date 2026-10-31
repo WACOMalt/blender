@@ -451,6 +451,14 @@ GLShaderInterface::GLShaderInterface(GLuint program, const shader::ShaderCreateI
       copy_input_name(input, res.uniformbuf.name, name_buffer_, name_buffer_offset);
       input->location = input->binding = res.slot;
       enabled_ubo_mask_ |= (1 << input->binding);
+      if (GLContext::is_gles) {
+        /* No `layout(binding)` in OpenGL ES 3.0, see #print_resource. */
+        const std::string block_name = "_" + std::string(res.uniformbuf.name.str_no_array());
+        const GLuint block_index = glGetUniformBlockIndex(program, block_name.c_str());
+        if (block_index != GL_INVALID_INDEX) {
+          glUniformBlockBinding(program, block_index, res.slot);
+        }
+      }
       input++;
     }
   }
@@ -461,6 +469,13 @@ GLShaderInterface::GLShaderInterface(GLuint program, const shader::ShaderCreateI
       copy_input_name(input, res.sampler.name, name_buffer_, name_buffer_offset);
       input->binding = res.slot;
       enabled_tex_mask_ |= (1ull << input->binding);
+      if (GLContext::is_gles) {
+        /* No `layout(binding)` in OpenGL ES 3.0, see #print_resource. */
+        const GLint location = glGetUniformLocation(program, name_buffer_ + input->name_offset);
+        if (location != -1) {
+          glUniform1i(location, res.slot);
+        }
+      }
       input++;
     }
     else if (res.bind_type == ShaderCreateInfo::Resource::BindType::IMAGE) {
@@ -484,6 +499,15 @@ GLShaderInterface::GLShaderInterface(GLuint program, const shader::ShaderCreateI
       copy_input_name(input, res.storagebuf.name, name_buffer_, name_buffer_offset);
       input->location = input->binding = res.slot;
       enabled_ssbo_mask_ |= (1 << input->binding);
+      if (GLContext::is_gles) {
+        /* Read as a uniform block in OpenGL ES, see #GLStorageBuf. */
+        const std::string block_name = "_" + std::string(res.storagebuf.name.str_no_array());
+        const GLuint block_index = glGetUniformBlockIndex(program, block_name.c_str());
+        if (block_index != GL_INVALID_INDEX) {
+          glUniformBlockBinding(
+              program, block_index, GLContext::gles_storage_buffer_binding(res.slot));
+        }
+      }
       input++;
     }
   }

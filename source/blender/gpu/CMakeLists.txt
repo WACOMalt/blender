@@ -492,6 +492,13 @@ if(WITH_OPENGL_BACKEND)
   list(APPEND SRC
     ${OPENGL_SRC}
   )
+  if(EMSCRIPTEN)
+    # WebGL2: desktop OpenGL functions WebGL doesn't have, see `opengl/web/epoxy/gl.h`.
+    list(APPEND SRC
+      opengl/web/gl_web_compat.cc
+      opengl/web/epoxy/gl.h
+    )
+  endif()
   list(APPEND LIB
     PRIVATE bf::dependencies::epoxy
   )

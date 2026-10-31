@@ -17,6 +17,8 @@
 #include <glslang/Public/ShaderLang.h>
 #include <SPIRV/GlslangToSpv.h>
 
+#include <spirv_glsl.hpp>
+
 #include "src/tint/api/tint.h"
 #include "src/tint/lang/core/ir/module.h"
 #include "src/tint/lang/spirv/reader/reader.h"
@@ -52,8 +54,13 @@ void WSC_exit()
   glslang::FinalizeProcess();
 }
 
+/**
+ * \param opengl: OpenGL semantics (desktop GLSL as the OpenGL backend writes it) instead of
+ * Vulkan semantics. Locations and bindings left out are assigned automatically.
+ */
 static bool glsl_to_spirv(const char *glsl,
                           const WSC_Stage stage,
+                          const bool opengl,
                           std::vector<uint32_t> &r_spirv,
                           std::string &r_log)
 {
@@ -62,12 +69,22 @@ static bool glsl_to_spirv(const char *glsl,
                                                                EShLangCompute;
   glslang::TShader shader(language);
   shader.setStrings(&glsl, 1);
-  shader.setEnvInput(glslang::EShSourceGlsl, language, glslang::EShClientVulkan, 100);
-  shader.setEnvClient(glslang::EShClientVulkan, glslang::EShTargetVulkan_1_1);
-  shader.setEnvTarget(glslang::EShTargetSpv, glslang::EShTargetSpv_1_3);
+  if (opengl) {
+    shader.setEnvInput(glslang::EShSourceGlsl, language, glslang::EShClientOpenGL, 100);
+    shader.setEnvClient(glslang::EShClientOpenGL, glslang::EShTargetOpenGL_450);
+    shader.setEnvTarget(glslang::EShTargetSpv, glslang::EShTargetSpv_1_0);
+    shader.setAutoMapLocations(true);
+    shader.setAutoMapBindings(true);
+  }
+  else {
+    shader.setEnvInput(glslang::EShSourceGlsl, language, glslang::EShClientVulkan, 100);
+    shader.setEnvClient(glslang::EShClientVulkan, glslang::EShTargetVulkan_1_1);
+    shader.setEnvTarget(glslang::EShTargetSpv, glslang::EShTargetSpv_1_3);
+  }
 
-  const EShMessages messages = EShMessages(EShMsgSpvRules | EShMsgVulkanRules);
-  if (!shader.parse(GetDefaultResources(), 450, false, messages)) {
+  const EShMessages messages = opengl ? EShMsgSpvRules :
+                                        EShMessages(EShMsgSpvRules | EShMsgVulkanRules);
+  if (!shader.parse(GetDefaultResources(), opengl ? 430 : 450, false, messages)) {
     r_log += shader.getInfoLog();
     return false;
   }
@@ -93,7 +110,7 @@ static WSC_Result glsl_to_wgsl(const char *glsl,
   std::string log;
 
   std::vector<uint32_t> spirv;
-  if (!glsl_to_spirv(glsl, stage, spirv, log)) {
+  if (!glsl_to_spirv(glsl, stage, false, spirv, log)) {
     result.log = copy_string(log);
     return result;
   }
@@ -156,6 +173,64 @@ WSC_Result WSC_glsl_to_wgsl(const char *glsl,
     WSC_Result result = {nullptr, copy_string(error.what()), nullptr, 0};
     return result;
   }
+}
+
+static WSC_EsslResult glsl_to_essl(const char *glsl, WSC_Stage stage)
+{
+  WSC_EsslResult result = {nullptr, nullptr};
+  std::string log;
+
+  std::vector<uint32_t> spirv;
+  if (!glsl_to_spirv(glsl, stage, true, spirv, log)) {
+    result.log = copy_string(log);
+    return result;
+  }
+
+  spirv_cross::CompilerGLSL compiler(std::move(spirv));
+
+  /* Interface blocks between stages are flattened to separate variables named after the block
+   * variable, which has no name in Blender's shaders (SPIRV-Cross would number it differently in
+   * each stage). Name it after its block type so the stages match. */
+  const spirv_cross::ShaderResources resources = compiler.get_shader_resources();
+  for (const auto *list : {&resources.stage_inputs, &resources.stage_outputs}) {
+    for (const spirv_cross::Resource &resource : *list) {
+      const spirv_cross::SPIRType &type = compiler.get_type(resource.base_type_id);
+      if (compiler.has_decoration(type.self, spv::DecorationBlock)) {
+        compiler.set_name(resource.id, compiler.get_name(type.self));
+      }
+    }
+  }
+
+  spirv_cross::CompilerGLSL::Options options;
+  options.version = 300;
+  options.es = true;
+  options.vulkan_semantics = false;
+  options.enable_420pack_extension = false;
+  options.fragment.default_float_precision = spirv_cross::CompilerGLSL::Options::Highp;
+  options.fragment.default_int_precision = spirv_cross::CompilerGLSL::Options::Highp;
+  compiler.set_common_options(options);
+  result.essl = copy_string(compiler.compile());
+  result.log = copy_string(log);
+  return result;
+}
+
+WSC_EsslResult WSC_glsl_to_essl(const char *glsl, WSC_Stage stage)
+{
+  try {
+    return glsl_to_essl(glsl, stage);
+  }
+  catch (const std::exception &error) {
+    WSC_EsslResult result = {nullptr, copy_string(error.what())};
+    return result;
+  }
+}
+
+void WSC_essl_result_free(WSC_EsslResult *result)
+{
+  free(result->essl);
+  free(result->log);
+  result->essl = nullptr;
+  result->log = nullptr;
 }
 
 void WSC_result_free(WSC_Result *result)

@@ -124,6 +124,13 @@ uchar *GLImmediate::begin()
   }
 #endif
 
+  bytes_mapped_ = bytes_needed;
+
+  if (GLContext::is_gles) {
+    staging_data_.resize(bytes_needed);
+    return staging_data_.data();
+  }
+
   GLbitfield access = GL_MAP_WRITE_BIT | GL_MAP_UNSYNCHRONIZED_BIT;
   if (!strict_vertex_len) {
     access |= GL_MAP_FLUSH_EXPLICIT_BIT;
@@ -131,7 +138,6 @@ uchar *GLImmediate::begin()
   void *data = glMapBufferRange(GL_ARRAY_BUFFER, buffer_offset(), bytes_needed, access);
   BLI_assert(data != nullptr);
 
-  bytes_mapped_ = bytes_needed;
   return static_cast<uchar *>(data);
 }
 
@@ -146,10 +152,18 @@ void GLImmediate::end()
       buffer_bytes_used = vertex_buffer_size(&vertex_format, vertex_len);
       /* unused buffer bytes are available to the next immBegin */
     }
-    /* tell OpenGL what range was modified so it doesn't copy the whole mapped range */
-    glFlushMappedBufferRange(GL_ARRAY_BUFFER, 0, buffer_bytes_used);
+    if (!GLContext::is_gles) {
+      /* tell OpenGL what range was modified so it doesn't copy the whole mapped range */
+      glFlushMappedBufferRange(GL_ARRAY_BUFFER, 0, buffer_bytes_used);
+    }
   }
-  glUnmapBuffer(GL_ARRAY_BUFFER);
+  if (GLContext::is_gles) {
+    glBindBuffer(GL_ARRAY_BUFFER, vbo_id());
+    glBufferSubData(GL_ARRAY_BUFFER, buffer_offset(), buffer_bytes_used, staging_data_.data());
+  }
+  else {
+    glUnmapBuffer(GL_ARRAY_BUFFER);
+  }
 
   if (vertex_len == 0) {
     /* NOOP. Nothing to draw. */

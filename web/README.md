@@ -29,7 +29,13 @@ web/build_blender.sh          # configures and builds into ../build_web
 web/build_bundle.sh                           # page + blender.js/.wasm + data files in ../build_web/bundle
 python3 web/tools/serve_isolated.py 8000 ../build_web/bundle   # serves with the headers below
 node web/tools/run_page.js http://localhost:8000/ shot.png 120000   # headless Chromium, WebGPU
+node web/tools/run_page.js "http://localhost:8000/?gpu=webgl2" shot.png 120000   # WebGL2
+BROWSER=firefox node web/tools/run_page.js http://localhost:8000/ shot.png 120000   # Firefox
 ```
+
+The page uses WebGPU when the browser has an adapter, WebGL2 (the OpenGL backend, user
+interface only, see `Web_Build_Plan.md`) otherwise; `?gpu=webgl2` forces WebGL2.
+`web/tools/thread_stacks.js` prints the stacks of all of Blender's threads, to find deadlocks.
 
 Blender can also run without a browser, for background tasks (Cycles renders, Python):
 
