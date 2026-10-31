@@ -1871,8 +1871,39 @@ bool WGShader::finalize(const ShaderCreateInfo *info)
     return visibility;
   };
 
+  /* Vertex stage aliases: only when the vertex shader uses them, and not while the fragment
+   * shader writes the resource (usage conflict), see #disabled_bindings_. */
+  const Span<WGResourceBinding> resources = interface_get().resources();
+  for (const WGResourceBinding &alias : resources) {
+    if (!alias.vertex_alias) {
+      continue;
+    }
+    const bool vertex_uses = all_bindings_used_[WSC_STAGE_VERTEX] ||
+                             used_bindings_[WSC_STAGE_VERTEX].contains(alias.binding);
+    if (!vertex_uses) {
+      disabled_bindings_.add(alias.binding);
+      continue;
+    }
+    for (const WGResourceBinding &resource : resources) {
+      if (!resource.vertex_alias && resource.type == alias.type && resource.slot == alias.slot &&
+          resource.sampler_slot == alias.sampler_slot &&
+          (all_bindings_used_[WSC_STAGE_FRAGMENT] ||
+           used_bindings_[WSC_STAGE_FRAGMENT].contains(resource.binding)))
+      {
+        CLOG_WARN(&LOG,
+                  "Shader %s: a resource written by the fragment stage is read by the vertex "
+                  "stage, the vertex stage reads a dummy buffer (WebGPU usage conflict)",
+                  name);
+        dummy_bindings_.add(alias.binding);
+      }
+    }
+  }
+
   Vector<WGBindingLayout> group_entries[2];
-  for (const WGResourceBinding &resource : interface_get().resources()) {
+  for (const WGResourceBinding &resource : resources) {
+    if (disabled_bindings_.contains(resource.binding)) {
+      continue;
+    }
     WGBindingLayout layout = resource.layout;
     layout.visibility = visibility_get(layout);
     group_entries[0].append(layout);

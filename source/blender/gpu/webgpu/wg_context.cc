@@ -412,10 +412,20 @@ static void wg_resources_get(WGContext &context, WGShader &shader, WGPendingReso
   WGBackend &backend = WGBackend::get();
 
   for (const WGResourceBinding &resource : shader.interface_get().resources()) {
+    if (shader.binding_is_disabled(resource.binding)) {
+      continue;
+    }
     WGBindingResource binding = {};
     binding.group = 0;
     binding.binding = resource.binding;
     binding.kind = resource.layout.kind;
+    if (shader.binding_is_dummy(resource.binding)) {
+      binding.object = backend.dummy_buffer_get();
+      binding.offset = 0;
+      binding.size = WG_DUMMY_BUFFER_SIZE;
+      r_pending.resources.append(binding);
+      continue;
+    }
     switch (resource.type) {
       case WGResourceBinding::Type::Sampler:
       case WGResourceBinding::Type::SubpassInput: {

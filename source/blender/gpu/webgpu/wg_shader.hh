@@ -126,6 +126,13 @@ class WGShader : public Shader {
   Set<uint32_t> used_bindings_[3];
   /** The used bindings of the stage are unknown, all are assumed used. */
   bool all_bindings_used_[3] = {false, false, false};
+  /**
+   * Vertex stage aliases the vertex shader doesn't use are left out of the layout: binding the
+   * same buffer as read-only and read-write in one bind group is a usage conflict in WebGPU.
+   * Aliases used while the fragment stage writes the resource are bound to a dummy buffer.
+   */
+  Set<uint32_t> disabled_bindings_;
+  Set<uint32_t> dummy_bindings_;
 
   std::mutex pipelines_mutex_;
   Map<WGRenderPipelineKey, WGObjectID> render_pipelines_;
@@ -133,6 +140,19 @@ class WGShader : public Shader {
 
   /** Push constants, std140 layout. */
   Vector<uint8_t> push_constants_data_;
+
+ public:
+  /** See #disabled_bindings_, used when gathering the resources of a draw. */
+  bool binding_is_disabled(const uint32_t binding) const
+  {
+    return disabled_bindings_.contains(binding);
+  }
+  bool binding_is_dummy(const uint32_t binding) const
+  {
+    return dummy_bindings_.contains(binding);
+  }
+
+ private:
 
   /** Entries of the bind group layouts. */
   Vector<WGBindingLayout> bind_group_entries_;
