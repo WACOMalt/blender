@@ -17,7 +17,9 @@ Requirements on the visitor's side:
   Without WebGPU the page shows an error.
 - A 64-bit machine with a few GB of RAM. The WebAssembly memory grows up to 4 GB.
 - The first visit downloads ~75 MB (compressed), later visits use the browser cache.
-  Start-up takes 10–20 s after the download (Python and the UI start every time).
+  Start-up after the download takes about 8 s on the first visit and 4 s on later ones: the
+  translated shaders, Python's byte-code and the asset library indexes are kept in IndexedDB
+  (times measured with a software GPU, real hardware is faster).
 
 ## The bundle
 
@@ -147,8 +149,9 @@ node web/tools/run_page.js https://blender.bsums.xyz/ shot.png 120000
   and starts one Web Worker per CPU core (`navigator.hardwareConcurrency`), all from
   `blender.js`.
 - Blender's home directory (`/home/web_user`: preferences, recent files, saved `.blend`
-  files) is kept in **IndexedDB** and restored on the next visit. It is synced every 10 s and
-  when the tab is hidden.
+  files, and the caches under `.cache/`: translated WGSL shaders, Python byte-code, asset
+  library indexes) is kept in **IndexedDB** and restored on the next visit. It is synced every
+  10 s and when the tab is hidden. Clearing the site data resets Blender to its defaults.
 - `.blend` files (and images) can be dropped on the canvas to open them; the "Files" button
   in the status bar lists the home directory with download and upload.
 - URL parameters for testing: `?args=-b,--python-expr,print(1)` (Blender's command line,

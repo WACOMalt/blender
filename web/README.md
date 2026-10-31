@@ -50,6 +50,13 @@ but it is not verified on real GPUs yet, so Material Preview falls back to Workb
 page is opened with `?env=BLENDER_WEBGPU_EEVEE=1` (needs a GPU with higher than default WebGPU
 limits, see `Web_Build_Plan.md`).
 
+Repeat visits start faster: the WGSL translations of the shaders
+(`~/.cache/blender/wgsl-v1/`, keyed by a hash of the GLSL), Python's byte-code
+(`~/.cache/python/`) and the asset library indexes live in the IndexedDB-backed home
+directory. The data files get the bundle's build time as modification time so these caches
+stay valid. `BLENDER_WEBGPU_NO_SHADER_CACHE=1` (via `?env=`) disables the shader cache,
+`--debug-gpu` logs `shader compile`/`shader cached` per stage.
+
 Headless Chromium draws with SwiftShader, which drops lines crossing the camera plane
 (`web/tests/lineclip.html`); screenshots miss the near part of the grid because of it.
 
