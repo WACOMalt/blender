@@ -1736,7 +1736,9 @@ void WGShader::build_module(const ShaderCreateInfo &info,
       for (size_t i = 0; i < glsl.size(); i++) {
         wrapped += glsl[i];
         line_len = (glsl[i] == '\n') ? 0 : line_len + 1;
-        if (line_len > 600 && glsl[i] == ';' && i + 1 < glsl.size() && glsl[i + 1] == ' ') {
+        if (line_len > 160 && ELEM(glsl[i], ';', ',') && i + 1 < glsl.size() &&
+            glsl[i + 1] == ' ')
+        {
           wrapped += "\n   ";
           line_len = 0;
         }
