@@ -124,6 +124,23 @@
           const [name, ...value] = entry.split('=');
           module.ENV[name] = value.join('=');
         }
+        /* The browser's clipboard can only be read asynchronously: read it when a modifier key
+         * is pressed or the page gets the focus, so Blender has the text when the paste comes
+         * (the browser may ask for permission the first time). */
+        const readClipboard = () => {
+          if (!navigator.clipboard || !navigator.clipboard.readText) {
+            return;
+          }
+          navigator.clipboard.readText().then(text => {
+            module.ccall('ghost_web_clipboard_set', null, ['string'], [text]);
+          }).catch(() => {});
+        };
+        window.addEventListener('keydown', event => {
+          if ((event.ctrlKey || event.metaKey) && !event.repeat) {
+            readClipboard();
+          }
+        }, true);
+        window.addEventListener('focus', readClipboard);
         /* Load the home directory from IndexedDB before Blender starts. */
         FS.mkdirTree(HOME);
         FS.mount(module.IDBFS, {}, HOME);

@@ -75,6 +75,11 @@ class GHOST_SystemEmscripten : public GHOST_System {
 
   char *getClipboard(bool selection) const override;
   void putClipboard(const char *buffer, bool selection) const override;
+  /** Set the text pasted by Blender without writing the browser's clipboard. */
+  void putClipboardInternal(const char *text) const
+  {
+    clipboard_ = text;
+  }
 
   uint64_t getMilliSeconds() const override;
 

@@ -594,8 +594,31 @@ char *GHOST_SystemEmscripten::getClipboard(bool selection) const
 
 void GHOST_SystemEmscripten::putClipboard(const char *buffer, bool selection) const
 {
-  if (!selection) {
-    clipboard_ = buffer;
+  if (selection || buffer == nullptr) {
+    return;
+  }
+  clipboard_ = buffer;
+  /* The browser's clipboard, written from the main thread (the write is asynchronous and may
+   * be refused, Blender's own copy is kept either way). */
+  MAIN_THREAD_EM_ASM(
+      {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(UTF8ToString($0)).catch(() => {});
+        }
+      },
+      buffer);
+}
+
+/**
+ * Called by the page with the text of the browser's clipboard (`navigator.clipboard.readText()`
+ * is asynchronous, the page reads it ahead of a paste, e.g. when a modifier key is pressed).
+ */
+extern "C" EMSCRIPTEN_KEEPALIVE void ghost_web_clipboard_set(const char *text)
+{
+  GHOST_SystemEmscripten *system = static_cast<GHOST_SystemEmscripten *>(
+      GHOST_ISystem::getSystem());
+  if (system && text) {
+    system->putClipboardInternal(text);
   }
 }
 
