@@ -68,28 +68,28 @@
     return bytes;
   }
 
+  const params = new URLSearchParams(location.search);
+  const args = params.has('args') ? params.get('args').split(',') : [];
+
+  /* The data files download while the browser fetches and compiles `blender.wasm` (the module
+   * is created right away and waits for the files in `preRun`). */
   let index, data;
-  try {
+  const dataReady = (async () => {
     index = await (await fetch('blender-data.json')).json();
     data = await fetchBytes('blender-data.bin', loaded => {
       setStatus(`Downloading Blender's data files… ${Math.round(loaded / 1e6)} / ` +
                 `${Math.round(index.size / 1e6)} MB`, loaded / index.size);
     });
-  }
-  catch (error) {
-    fail(`Failed to download Blender's data files: ${error.message}`);
-    return;
-  }
-  mark('data files downloaded');
-  setStatus('Starting Blender…', 1.0);
-
-  const params = new URLSearchParams(location.search);
-  const args = params.has('args') ? params.get('args').split(',') : [];
-  /* Extra files for testing, e.g. `?fetch=tests/script.py&args=--python,/tests/script.py`. */
-  const extra_files = [];
-  for (const path of params.has('fetch') ? params.get('fetch').split(',') : []) {
-    extra_files.push([path, new Uint8Array(await (await fetch(path)).arrayBuffer())]);
-  }
+    mark('data files downloaded');
+    setStatus('Starting Blender…', 1.0);
+    /* Extra files for testing, e.g. `?fetch=tests/script.py&args=--python,/tests/script.py`. */
+    const extra_files = [];
+    for (const path of params.has('fetch') ? params.get('fetch').split(',') : []) {
+      extra_files.push([path, new Uint8Array(await (await fetch(path)).arrayBuffer())]);
+    }
+    return extra_files;
+  })();
+  dataReady.catch(error => fail(`Failed to download Blender's data files: ${error.message}`));
 
   /* Blender's home directory, persistent in IndexedDB. */
   const HOME = '/home/web_user';
@@ -118,18 +118,37 @@
     preRun: [
       instance => {
         module = instance;
+        mark('WebAssembly module instantiated');
         /* For debugging from the console (e.g. `blender.FS`). */
         window.blender = module;
         const FS = module.FS;
-        /* A fixed modification time (the bundle's build time) keeps Blender's caches of these
-         * files, like the asset library indexes in the home directory, valid across visits. */
-        const mtime = (index.mtime || 0) * 1000;
-        for (const [path, offset, size] of index.files) {
-          FS.mkdirTree(path.substring(0, path.lastIndexOf('/')));
-          FS.writeFile(path, data.subarray(offset, offset + size));
-          FS.utime(path, mtime, mtime);
-        }
-        data = null;
+        module.addRunDependency('data');
+        dataReady.then(extra_files => {
+          /* A fixed modification time (the bundle's build time) keeps Blender's caches of these
+           * files, like the asset library indexes in the home directory, valid across visits. */
+          const mtime = (index.mtime || 0) * 1000;
+          const dirs = new Set();
+          for (const [path, offset, size] of index.files) {
+            const slash = path.lastIndexOf('/');
+            const dir = path.substring(0, slash);
+            if (!dirs.has(dir)) {
+              FS.mkdirTree(dir);
+              dirs.add(dir);
+            }
+            /* `canOwn`: the file keeps a view of the downloaded buffer instead of a copy. */
+            FS.createDataFile(dir, path.substring(slash + 1),
+                              data.subarray(offset, offset + size), true, true, true);
+            FS.utime(path, mtime, mtime);
+          }
+          data = null;
+          for (const [path, bytes] of extra_files) {
+            const fs_path = '/' + path;
+            FS.mkdirTree(fs_path.substring(0, fs_path.lastIndexOf('/')));
+            FS.writeFile(fs_path, bytes);
+          }
+          mark('data files written to the file-system');
+          module.removeRunDependency('data');
+        }, () => {});
         /* Python's byte-code cache in the persistent home directory, the scripts themselves are
          * in memory only and would be compiled again on every visit. */
         module.ENV.PYTHONPYCACHEPREFIX = HOME + '/.cache/python';
@@ -155,7 +174,6 @@
           }
         }, true);
         window.addEventListener('focus', readClipboard);
-        mark('data files written to the file-system');
         /* Load the home directory from IndexedDB before Blender starts. */
         FS.mkdirTree(HOME);
         FS.mount(module.IDBFS, {}, HOME);
@@ -167,11 +185,6 @@
           mark('home directory loaded from IndexedDB');
           module.removeRunDependency('idbfs');
         });
-        for (const [path, bytes] of extra_files) {
-          const fs_path = '/' + path;
-          FS.mkdirTree(fs_path.substring(0, fs_path.lastIndexOf('/')));
-          FS.writeFile(fs_path, bytes);
-        }
       },
     ],
     onRuntimeInitialized: () => {
