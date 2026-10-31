@@ -13,6 +13,8 @@
 
 #include "wg_common.hh"
 #include "wg_context.hh"
+#include <cmath>
+
 #include "wg_framebuffer.hh"
 #include "wg_shader.hh"
 #include "wg_texture.hh"
@@ -131,6 +133,7 @@ uint32_t WGFrameBuffer::render_pass_ensure()
 
   WGCmdBeginRenderPass cmd = {};
   bool has_attachment = false;
+  uint32_t non_finite_clears = 0;
   for (int slot = 0; slot < WG_MAX_COLOR_TARGETS; slot++) {
     const GPUAttachment &attachment = attachments_[GPU_FB_COLOR_ATTACHMENT0 + slot];
     WGTexture *texture = static_cast<WGTexture *>(attachment.tex);
@@ -146,6 +149,11 @@ uint32_t WGFrameBuffer::render_pass_ensure()
     color.store_op = color_store_ops_[slot];
     for (int i = 0; i < 4; i++) {
       color.clear_color[i] = clear_colors_[slot][i];
+      /* The browser rejects non-finite clear values, these slots are cleared by a draw below. */
+      if (color.load_op == WGPULoadOp_Clear && !std::isfinite(color.clear_color[i])) {
+        color.clear_color[i] = 0.0;
+        non_finite_clears |= 1u << slot;
+      }
     }
     cmd.color_len = slot + 1;
     has_attachment = true;
@@ -171,11 +179,33 @@ uint32_t WGFrameBuffer::render_pass_ensure()
     return 0;
   }
 
-  WGRecord record;
-  pass_id_ = wg_recorder().next_pass_id++;
-  cmd.pass_id = pass_id_;
-  record.stream.push(WGCommandType::BeginRenderPass, cmd);
+  const double4 clear_colors[WG_MAX_COLOR_TARGETS] = {clear_colors_[0],
+                                                       clear_colors_[1],
+                                                       clear_colors_[2],
+                                                       clear_colors_[3],
+                                                       clear_colors_[4],
+                                                       clear_colors_[5],
+                                                       clear_colors_[6],
+                                                       clear_colors_[7]};
+  {
+    WGRecord record;
+    pass_id_ = wg_recorder().next_pass_id++;
+    cmd.pass_id = pass_id_;
+    record.stream.push(WGCommandType::BeginRenderPass, cmd);
+  }
   load_ops_reset();
+  if (non_finite_clears != 0) {
+    /* Like the load operation, the clear covers the whole attachment. */
+    const bool scissor_test = scissor_test_;
+    scissor_test_ = false;
+    clear_by_draw(non_finite_clears,
+                  Span<double4>(clear_colors, WG_MAX_COLOR_TARGETS),
+                  false,
+                  0.0f,
+                  false,
+                  0);
+    scissor_test_ = scissor_test;
+  }
   return pass_id_;
 }
 

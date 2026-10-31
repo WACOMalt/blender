@@ -34,6 +34,11 @@ void GPU_backend_type_selection_set(const GPUBackendType backend);
 GPUBackendType GPU_backend_type_selection_get();
 GPUBackendType GPU_backend_get_type();
 const char *GPU_backend_get_name();
+/**
+ * EEVEE's shaders can not be translated to WGSL yet, Workbench is used instead on WebGPU.
+ * Set `BLENDER_WEBGPU_EEVEE=1` to try EEVEE anyway (to work on the shaders).
+ */
+bool GPU_backend_supports_eevee();
 
 /**
  * Detect the most suited GPUBackendType.

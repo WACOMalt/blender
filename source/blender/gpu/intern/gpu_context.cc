@@ -16,6 +16,7 @@
 #include "BKE_global.hh"
 
 #include "BLI_assert.hh"
+#include "BLI_path_utils.hh"
 #include "BLI_threads.hh"
 #include "BLI_vector_set.hh"
 
@@ -663,6 +664,17 @@ GPUBackendType GPU_backend_get_type()
 const char *GPU_backend_get_name()
 {
   return gpu_backend_type_name(GPU_backend_get_type());
+}
+
+bool GPU_backend_supports_eevee()
+{
+#ifdef WITH_WEBGPU_BACKEND
+  if (GPU_backend_get_type() == GPU_BACKEND_WEBGPU) {
+    static const bool force_eevee = BLI_getenv("BLENDER_WEBGPU_EEVEE") != nullptr;
+    return force_eevee;
+  }
+#endif
+  return true;
 }
 
 GPUBackend *GPUBackend::get()

@@ -110,6 +110,9 @@ static WSC_Result glsl_to_wgsl(const char *glsl,
   tint::wgsl::writer::Options writer_options;
   /* GLSL doesn't require derivatives in uniform control flow, Blender's shaders rely on it. */
   writer_options.allow_non_uniform_derivatives = true;
+  /* Emit `enable`/`requires` directives for whatever the shader needs (read-write storage
+   * textures, dual source blending, ...); the browser reports what it doesn't support. */
+  writer_options.allowed_features = tint::wgsl::AllowedFeatures::Everything();
   auto output = tint::wgsl::writer::WgslFromIR(ir.Get(), writer_options);
   if (output != tint::Success) {
     result.log = copy_string(log + output.Failure().reason);

@@ -1485,12 +1485,12 @@ void DRWContext::enable_engines(bool gpencil_engine_needed, RenderEngineType *re
       case OB_RENDER:
       default:
         if (render_engine_type == &DRW_engine_viewport_eevee_type) {
-          /* The shaders of EEVEE can not be translated to WGSL yet, use Workbench instead. */
-          if (GPU_backend_get_type() == GPU_BACKEND_WEBGPU) {
-            view_data.workbench.set_used(true);
+          if (GPU_backend_supports_eevee()) {
+            view_data.eevee.set_used(true);
           }
           else {
-            view_data.eevee.set_used(true);
+            /* The shaders of EEVEE can not be translated to WGSL yet, use Workbench instead. */
+            view_data.workbench.set_used(true);
           }
         }
         else if (render_engine_type == &DRW_engine_viewport_workbench_type) {

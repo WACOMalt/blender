@@ -11,7 +11,7 @@
 // Files can be dropped on the page to open them, the "Files" panel downloads and uploads files.
 //
 // Command line arguments can be passed for testing, e.g. `?args=-b,--python-expr,print(1)`,
-// `?fetch=` adds files from the server to Blender's file-system.
+// `?fetch=` adds files from the server to Blender's file-system, `?env=` sets environment variables.
 'use strict';
 
 (async () => {
@@ -119,6 +119,11 @@
           FS.writeFile(path, data.subarray(offset, offset + size));
         }
         data = null;
+        /* Environment variables for testing, e.g. `?env=BLENDER_WEBGPU_EEVEE=1,BLENDER_DEBUG=1`. */
+        for (const entry of params.has('env') ? params.get('env').split(',') : []) {
+          const [name, ...value] = entry.split('=');
+          module.ENV[name] = value.join('=');
+        }
         /* Load the home directory from IndexedDB before Blender starts. */
         FS.mkdirTree(HOME);
         FS.mount(module.IDBFS, {}, HOME);

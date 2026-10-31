@@ -46,7 +46,7 @@ using namespace blender::eevee;
 static void eevee_render(RenderEngine *engine, Depsgraph *depsgraph)
 {
   /* The shaders of EEVEE can not be translated to WGSL yet. */
-  if (GPU_backend_get_type() == GPU_BACKEND_WEBGPU) {
+  if (!GPU_backend_supports_eevee()) {
     RE_engine_report(
         engine, RPT_ERROR, "EEVEE is not supported by the WebGPU backend yet, use Cycles");
     return;
