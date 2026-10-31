@@ -380,7 +380,8 @@ static const char *wg_image_vector_prefix(const ImageType type)
   std::stringstream ss;
   print_image_type(ss, type, ShaderCreateInfo::Resource::BindType::IMAGE);
   const std::string str = ss.str();
-  return str[0] == 'i' ? "i" : str[0] == 'u' ? "u" : "";
+  /* `iimage*`, `uimage*` or `image*`. */
+  return str.starts_with("iimage") ? "i" : str.starts_with("uimage") ? "u" : "";
 }
 
 /** Dimension of the image coordinates (1, 2 or 3). */
@@ -1759,7 +1760,8 @@ void WGShader::build_module(const ShaderCreateInfo &info,
     print_log(sources, log.c_str(), stage_name, true, &parser);
     if (G.debug & G_DEBUG_GPU) {
       /* The translated source, to reproduce the error with `web/shader_compiler/wsc_test`.
-       * The browser truncates long console lines, break them at statements. */
+       * The browser truncates long console lines, break them at statements (continuation lines
+       * start with a tab, see `web/tools`). */
       std::string wrapped;
       size_t line_len = 0;
       for (size_t i = 0; i < glsl.size(); i++) {
@@ -1768,7 +1770,7 @@ void WGShader::build_module(const ShaderCreateInfo &info,
         if (line_len > 160 && ELEM(glsl[i], ';', ',') && i + 1 < glsl.size() &&
             glsl[i + 1] == ' ')
         {
-          wrapped += "\n   ";
+          wrapped += "\n\t";
           line_len = 0;
         }
       }
