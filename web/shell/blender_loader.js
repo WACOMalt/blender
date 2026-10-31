@@ -121,9 +121,13 @@
         /* For debugging from the console (e.g. `blender.FS`). */
         window.blender = module;
         const FS = module.FS;
+        /* A fixed modification time (the bundle's build time) keeps Blender's caches of these
+         * files, like the asset library indexes in the home directory, valid across visits. */
+        const mtime = (index.mtime || 0) * 1000;
         for (const [path, offset, size] of index.files) {
           FS.mkdirTree(path.substring(0, path.lastIndexOf('/')));
           FS.writeFile(path, data.subarray(offset, offset + size));
+          FS.utime(path, mtime, mtime);
         }
         data = null;
         /* Python's byte-code cache in the persistent home directory, the scripts themselves are

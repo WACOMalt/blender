@@ -584,6 +584,16 @@ void BPY_python_start(bContext *C, int argc, const char **argv)
       }
     }
 
+#  ifdef __EMSCRIPTEN__
+    /* The scripts are in memory and compiled on every start, keep the byte-code in the
+     * persistent home directory (the page sets the variable). The isolated configuration
+     * ignores the environment, so apply it here. */
+    if (const char *pycache_prefix = BLI_getenv("PYTHONPYCACHEPREFIX")) {
+      status = PyConfig_SetBytesString(&config, &config.pycache_prefix, pycache_prefix);
+      pystatus_exit_on_error(status);
+    }
+#  endif
+
     /* Initialize Python (also acquires lock). */
     status = Py_InitializeFromConfig(&config);
     PyConfig_Clear(&config);

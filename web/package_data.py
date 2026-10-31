@@ -14,6 +14,7 @@ Paths are absolute in the virtual file-system, e.g. ``/5.4/scripts/startup/...``
 """
 
 import json
+import time
 import os
 import sys
 
@@ -59,7 +60,9 @@ def main() -> int:
                 total += len(data)
 
     with open(os.path.join(out_dir, "blender-data.json"), "w", encoding="utf-8") as fh:
-        json.dump({"files": files, "size": total}, fh, separators=(",", ":"))
+        # `mtime`: the files get this modification time in the browser (the data never changes
+        # between deployments), so Blender's caches of them (asset indexes) stay valid.
+        json.dump({"files": files, "size": total, "mtime": int(time.time())}, fh, separators=(",", ":"))
     print("Packed {:d} files, {:.1f} MB".format(len(files), total / 1e6))
     return 0
 

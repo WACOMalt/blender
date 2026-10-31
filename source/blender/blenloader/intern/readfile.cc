@@ -850,6 +850,19 @@ short blo_bhead_id_flag(const FileData *fd, const BHead *bhead)
 AssetMetaData *blo_bhead_id_asset_data_address(const FileData *fd, const BHead *bhead)
 {
   BLI_assert(blo_bhead_is_id_valid_type(bhead));
+  if (fd->flags & FD_FLAGS_POINTSIZE_DIFFERS) {
+    /* The pointer has the size it had when the file was written, convert it the way the block
+     * addresses (#BHead::old) and the pointers in reconstructed structs are converted, so the
+     * meta-data block can be looked up with it. */
+    if (fd->flags & FD_FLAGS_FILE_POINTSIZE_IS_4) {
+      const uint32_t *asset_data = blo_bhead_data_at<uint32_t>(bhead, fd->id_asset_data_offset);
+      return asset_data ? reinterpret_cast<AssetMetaData *>(uintptr_t(*asset_data)) : nullptr;
+    }
+    const uint64_t *asset_data = blo_bhead_data_at<uint64_t>(bhead, fd->id_asset_data_offset);
+    return asset_data ? reinterpret_cast<AssetMetaData *>(
+                            uintptr_t(uint32_from_uint64_ptr(*asset_data))) :
+                        nullptr;
+  }
   AssetMetaData *const *asset_data = blo_bhead_data_at<AssetMetaData *>(bhead,
                                                                         fd->id_asset_data_offset);
   return asset_data ? *asset_data : nullptr;
