@@ -1803,9 +1803,6 @@ void WGShader::build_module(const ShaderCreateInfo &info,
   const char *stage_name = stage == WSC_STAGE_VERTEX   ? "vertex" :
                            stage == WSC_STAGE_FRAGMENT ? "fragment" :
                                                          "compute";
-  if (G.debug & G_DEBUG_GPU) {
-    printf("WebGPU shader compile: %s (%s)\n", name, stage_name);
-  }
   std::string patch = wg_glsl_patch(stage_define);
   if (glsl_uses_integer_samplers(info)) {
     patch += WG_INTEGER_TEXTURE_FUNCTIONS;
@@ -1853,6 +1850,9 @@ void WGShader::build_module(const ShaderCreateInfo &info,
   std::string cached_wgsl;
   Vector<WSC_Binding> cached_bindings;
   if (wg_shader_cache_read(cache_path, cached_wgsl, cached_bindings)) {
+    if (G.debug & G_DEBUG_GPU) {
+      printf("WebGPU shader cached: %s (%s)\n", name, stage_name);
+    }
     for (const WSC_Binding &binding : cached_bindings) {
       if (binding.group == 0) {
         used_bindings_[stage].add(binding.binding);
@@ -1873,6 +1873,9 @@ void WGShader::build_module(const ShaderCreateInfo &info,
     return;
   }
 
+  if (G.debug & G_DEBUG_GPU) {
+    printf("WebGPU shader compile: %s (%s)\n", name, stage_name);
+  }
   const Vector<WSC_SamplerMapping> sampler_mappings = wg_sampler_mappings(interface_get());
   WSC_Result result = WSC_glsl_to_wgsl(glsl.c_str(),
                                        WSC_Stage(stage),
