@@ -10,6 +10,7 @@
 #include "wg_backend.hh"
 #include "wg_common.hh"
 #include "wg_misc.hh"
+#include "wg_shader_interface.hh"
 #include "wg_texture.hh"
 
 namespace blender::gpu {
