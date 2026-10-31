@@ -43,11 +43,21 @@ void WGBuffer::ensure(const size_t size)
   if (id_ != WG_NULL_ID && size_ >= size) {
     return;
   }
-  free();
+  WGRecord record;
+  ensure(size, record.stream);
+}
+
+void WGBuffer::ensure(const size_t size, WGCommandStream &stream)
+{
+  if (id_ != WG_NULL_ID && size_ >= size) {
+    return;
+  }
+  if (id_ != WG_NULL_ID) {
+    stream.push(WGCommandType::Destroy, WGCmdDestroy{id_});
+  }
   size_ = WGCommandStream::align_up(max_ii(int(size), 4), 4);
   id_ = wg_object_id_alloc();
-  WGRecord record;
-  record.stream.push(WGCommandType::CreateBuffer, WGCmdCreateBuffer{id_, size_});
+  stream.push(WGCommandType::CreateBuffer, WGCmdCreateBuffer{id_, size_});
 }
 
 void WGBuffer::free()
@@ -62,14 +72,25 @@ void WGBuffer::update(const void *data, const size_t size, const size_t offset)
   if (size == 0) {
     return;
   }
-  ensure(offset + size);
+  WGRecord record;
+  update(record.stream, data, size, offset);
+}
+
+void WGBuffer::update(WGCommandStream &stream,
+                      const void *data,
+                      const size_t size,
+                      const size_t offset)
+{
+  if (size == 0) {
+    return;
+  }
+  ensure(offset + size, stream);
   /* Copies need 4 byte aligned offsets and sizes. */
   const size_t aligned_offset = offset & ~size_t(3);
   const size_t head = offset - aligned_offset;
   const size_t aligned_size = WGCommandStream::align_up(head + size, 4);
-  WGRecord record;
-  const uint64_t staging_offset = record.stream.staging_alloc(aligned_size);
-  uint8_t *staging = record.stream.staging.data() + staging_offset;
+  const uint64_t staging_offset = stream.staging_alloc(aligned_size);
+  uint8_t *staging = stream.staging.data() + staging_offset;
   memset(staging, 0, aligned_size);
   memcpy(staging + head, data, size);
   WGCmdCopyStagingToBuffer cmd = {};
@@ -77,7 +98,7 @@ void WGBuffer::update(const void *data, const size_t size, const size_t offset)
   cmd.staging_offset = staging_offset;
   cmd.buffer_offset = aligned_offset;
   cmd.size = std::min<uint64_t>(aligned_size, size_ - aligned_offset);
-  record.stream.push(WGCommandType::CopyStagingToBuffer, cmd);
+  stream.push(WGCommandType::CopyStagingToBuffer, cmd);
 }
 
 void WGBuffer::clear_to_zero()
@@ -444,6 +465,8 @@ void WGUniformBuf::update(const void *data)
   }
   memcpy(data_, data, size_in_bytes_);
   uploaded_generation_ = 0;
+  device_dirty_ = true;
+  device_is_source_ = false;
 }
 
 void WGUniformBuf::clear_to_zero()
@@ -453,6 +476,8 @@ void WGUniformBuf::clear_to_zero()
   }
   memset(data_, 0, size_in_bytes_);
   uploaded_generation_ = 0;
+  device_dirty_ = true;
+  device_is_source_ = false;
 }
 
 void WGUniformBuf::host_data_set(const void *data, const size_t size)
@@ -464,9 +489,31 @@ void WGUniformBuf::host_data_set(const void *data, const size_t size)
   update(data);
 }
 
+WGBufferBinding WGUniformBuf::storage_binding_ensure(WGCommandStream &stream,
+                                                     const bool writable)
+{
+  if (data_ == nullptr) {
+    clear_to_zero();
+  }
+  const size_t binding_size = WGCommandStream::align_up(size_in_bytes_, 16);
+  device_buffer_.ensure(binding_size, stream);
+  if (device_dirty_) {
+    device_buffer_.update(stream, data_, size_in_bytes_);
+    device_dirty_ = false;
+  }
+  if (writable) {
+    device_is_source_ = true;
+  }
+  return {device_buffer_.id_get(), 0, binding_size};
+}
+
 WGBufferBinding WGUniformBuf::binding_ensure(WGCommandStream &stream,
                                              const uint64_t stream_generation)
 {
+  if (device_is_source_) {
+    /* Written by shaders, the device buffer has the current content. */
+    return {device_buffer_.id_get(), 0, WGCommandStream::align_up(size_in_bytes_, 16)};
+  }
   if (uploaded_generation_ != stream_generation) {
     if (data_ == nullptr) {
       clear_to_zero();

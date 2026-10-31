@@ -400,8 +400,14 @@ static void wg_buffer_binding(const WGBufferBinding &buffer, WGBindingResource &
  */
 struct WGPendingResources {
   Vector<WGBindingResource, 16> resources;
-  /** Resources with the data of a uniform buffer. */
-  Vector<std::pair<int, WGUniformBuf *>, 8> uniform_buffers;
+  /** Resources with the data of a uniform buffer (also bound as storage buffers). */
+  struct UniformBufferUse {
+    int index;
+    WGUniformBuf *uniform_buffer;
+    bool as_storage;
+    bool writable;
+  };
+  Vector<UniformBufferUse, 8> uniform_buffers;
   /** Resource of the push constants, -1 when there are none. */
   int push_constants = -1;
 };
@@ -536,8 +542,11 @@ static void wg_resources_get(WGContext &context, WGShader &shader, WGPendingReso
                                 state_manager.storage_buffers[resource.slot];
         }
         if (buffer.uniform_buffer) {
-          r_pending.uniform_buffers.append({int(r_pending.resources.size()),
-                                            buffer.uniform_buffer});
+          r_pending.uniform_buffers.append(
+              {int(r_pending.resources.size()),
+               buffer.uniform_buffer,
+               !is_uniform,
+               resource.layout.kind == WGBindingLayout::Kind::StorageBuffer});
         }
         else {
           wg_buffer_binding(buffer.buffer, binding);
@@ -559,9 +568,12 @@ static void wg_resources_resolve_stream_data(WGShader &shader,
                                              const uint64_t generation,
                                              WGPendingResources &pending)
 {
-  for (const auto &[index, uniform_buffer] : pending.uniform_buffers) {
-    wg_buffer_binding(uniform_buffer->binding_ensure(stream, generation),
-                      pending.resources[index]);
+  for (const WGPendingResources::UniformBufferUse &use : pending.uniform_buffers) {
+    const WGBufferBinding binding = use.as_storage ?
+                                        use.uniform_buffer->storage_binding_ensure(
+                                            stream, use.writable) :
+                                        use.uniform_buffer->binding_ensure(stream, generation);
+    wg_buffer_binding(binding, pending.resources[use.index]);
   }
   if (pending.push_constants != -1) {
     const Span<uint8_t> data = shader.push_constants_data();

@@ -46,6 +46,9 @@ class WGBuffer {
   void ensure(size_t size);
   void free();
   void update(const void *data, size_t size, size_t offset = 0);
+  /** Variants recording into `stream`, for callers holding the recorder's lock. */
+  void ensure(size_t size, WGCommandStream &stream);
+  void update(WGCommandStream &stream, const void *data, size_t size, size_t offset = 0);
   void clear_to_zero();
   /** Wait for the GPU and copy the contents to `r_data`. */
   void read(void *r_data, size_t size) const;
@@ -126,6 +129,15 @@ class WGIndexBuf : public IndexBuf {
 class WGUniformBuf : public UniformBuf {
   uint64_t uploaded_generation_ = 0;
   uint64_t uploaded_offset_ = 0;
+  /**
+   * Bindings as storage buffer use a device buffer (the stream's data is also bound as uniform
+   * data, which conflicts with writable storage, and shader writes must persist).
+   */
+  WGBuffer device_buffer_;
+  /** The host data is newer than the device buffer. */
+  bool device_dirty_ = true;
+  /** The device buffer may have been written by shaders, it is the current content. */
+  bool device_is_source_ = false;
 
  public:
   WGUniformBuf(size_t size, const char *name);
@@ -141,6 +153,8 @@ class WGUniformBuf : public UniformBuf {
 
   /** Copy the data to the current stream when needed, must be called with the recorder locked. */
   WGBufferBinding binding_ensure(WGCommandStream &stream, uint64_t stream_generation);
+  /** Binding as storage buffer, must be called with the recorder locked. */
+  WGBufferBinding storage_binding_ensure(WGCommandStream &stream, bool writable);
 };
 
 class WGStorageBuf : public StorageBuf {
