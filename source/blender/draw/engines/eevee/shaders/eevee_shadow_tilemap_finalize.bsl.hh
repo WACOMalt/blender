@@ -72,12 +72,15 @@ void tilemap_finalize_main([[resource_table]] TilemapFinalize &srt,
 
   srt.lod_rendered = 0u;
 
-  for (int lod = lod_max; lod >= 0; lod--) {
+  /* The loop count is the same for all threads, which WGSL requires for the barriers inside.
+   * Levels past `lod_max` do nothing. */
+  for (int lod = SHADOW_TILEMAP_LOD; lod >= 0; lod--) {
+    const bool lod_active = lod <= lod_max;
     int2 tile_co_lod = tile_co >> lod;
     int tile_index = shadow_tile_offset(uint2(tile_co_lod), tilemap_data.tiles_index, lod);
 
     /* Compute update area. */
-    if (local_index == 0u) {
+    if (lod_active && local_index == 0u) {
       srt.rect_min_x = SHADOW_TILEMAP_RES;
       srt.rect_min_y = SHADOW_TILEMAP_RES;
       srt.rect_max_x = 0;
@@ -88,7 +91,7 @@ void tilemap_finalize_main([[resource_table]] TilemapFinalize &srt,
 
     ShadowTileData tile = shadow_tile_unpack(srt.tiles_buf[tile_index]);
     bool lod_valid_thread = all(equal(tile_co, tile_co_lod << lod));
-    bool do_page_render = tile.is_used && tile.do_update && lod_valid_thread;
+    bool do_page_render = lod_active && tile.is_used && tile.do_update && lod_valid_thread;
     if (do_page_render) {
       atomicMin(srt.rect_min_x, tile_co_lod.x);
       atomicMin(srt.rect_min_y, tile_co_lod.y);
@@ -106,7 +109,7 @@ void tilemap_finalize_main([[resource_table]] TilemapFinalize &srt,
     int2 viewport_size = shadow_viewport_size_get(uint(viewport_index));
 
     /* Issue one view if there is an update in the LOD. */
-    if (local_index == 0u) {
+    if (lod_active && local_index == 0u) {
       bool lod_has_update = rect_min.x < rect_max.x;
       if (lod_has_update) {
         int view_index = atomicAdd(srt.statistics_buf.view_needed_count, 1);

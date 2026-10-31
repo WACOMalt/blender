@@ -80,6 +80,7 @@ class WGDevice {
   struct TextureEntry {
     WGPUTexture texture = nullptr;
     WGPUTextureFormat format = WGPUTextureFormat_Undefined;
+    TextureFormat blender_format = TextureFormat::Invalid;
     WGPUTextureDimension dimension = WGPUTextureDimension_2D;
     uint32_t mip_count = 1;
     uint32_t layers = 1;
@@ -113,6 +114,9 @@ class WGDevice {
   void execute_dispatch(const WGCmdDispatch &cmd, const uint8_t *trailing, ExecuteState &state);
   void execute_clear_attachments(const WGCmdClearAttachments &cmd, ExecuteState &state);
   void execute_present(const WGCmdPresent &cmd, ExecuteState &state);
+  void execute_sync_buffer_image(const WGCmdSyncBufferImage &cmd, ExecuteState &state);
+  /** Buffer of an emulated image, created when needed. Null for unknown textures. */
+  WGPUBuffer buffer_image_get(WGObjectID texture, uint32_t mip);
   WGPUShaderModule shader_module_create(const std::string &wgsl);
   void destroy_object(WGObjectID id);
 
@@ -150,6 +154,11 @@ class WGDevice {
   /** Pipelines of #execute_clear_attachments, keyed by the pass formats. */
   Map<std::string, WGPURenderPipeline> clear_pipelines_;
   WGPURenderPipeline present_pipeline_ = nullptr;
+  /* Emulated images (see `wg_shader.hh`): buffers by texture and mip level, and the pipelines
+   * copying between textures and buffers, by format and dimension. */
+  Map<uint64_t, WGPUBuffer> buffer_images_;
+  Map<std::string, WGPUComputePipeline> sync_to_buffer_pipelines_;
+  Map<std::string, WGPURenderPipeline> sync_to_texture_pipelines_;
 };
 
 }  // namespace blender::gpu

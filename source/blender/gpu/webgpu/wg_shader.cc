@@ -10,6 +10,7 @@
 
 #include "BLI_math_base.hh"
 #include "BLI_set.hh"
+#include "BLI_string.hh"
 
 #include "BKE_global.hh"
 
@@ -346,11 +347,395 @@ static std::ostream &print_qualifier(std::ostream &os,
   return os;
 }
 
+/** Name of a resource, used in the macros of the vertex stage aliases. */
+static std::string resource_name(const ShaderCreateInfo::Resource &res)
+{
+  switch (res.bind_type) {
+    case ShaderCreateInfo::Resource::BindType::IMAGE:
+      return res.image.name;
+    case ShaderCreateInfo::Resource::BindType::SAMPLER:
+      return res.sampler.name;
+    case ShaderCreateInfo::Resource::BindType::STORAGE_BUFFER:
+      return res.storagebuf.name.str_no_array();
+    default:
+      return "";
+  }
+}
+
+static bool wg_is_identifier_char(char c);
+
+/* -------------------------------------------------------------------- */
+/** \name Emulated Images
+ *
+ * See #WGImageMode. Images bound as textures get `NAME_wg_imageLoad()` helpers that fetch the
+ * texture. Images emulated with a buffer are declared as a storage buffer of 32 bit words holding
+ * the bits of the texture format (#WGTexelLayout), with helpers for the image functions and the
+ * size of the image in the push constants (`NAME_wg_meta`). The device copies the texture to
+ * the buffer and back when the texture is used (#WGCmdSyncBufferImage).
+ * \{ */
+
+/** Component type of the image (float, int, uint) as the GLSL vector prefix. */
+static const char *wg_image_vector_prefix(const ImageType type)
+{
+  std::stringstream ss;
+  print_image_type(ss, type, ShaderCreateInfo::Resource::BindType::IMAGE);
+  const std::string str = ss.str();
+  return str[0] == 'i' ? "i" : str[0] == 'u' ? "u" : "";
+}
+
+/** Dimension of the image coordinates (1, 2 or 3). */
+static int wg_image_coord_size(const ImageType type)
+{
+  switch (type) {
+    case ImageType::Float1D:
+    case ImageType::Int1D:
+    case ImageType::Uint1D:
+    case ImageType::FloatBuffer:
+    case ImageType::IntBuffer:
+    case ImageType::UintBuffer:
+      return 1;
+    case ImageType::Float2D:
+    case ImageType::Int2D:
+    case ImageType::Uint2D:
+    case ImageType::Float1DArray:
+    case ImageType::Int1DArray:
+    case ImageType::Uint1DArray:
+    case ImageType::AtomicUint2D:
+    case ImageType::AtomicInt2D:
+      return 2;
+    default:
+      return 3;
+  }
+}
+
+static std::string wg_ivec(const int size)
+{
+  return size == 1 ? "int" : size == 2 ? "ivec2" : "ivec3";
+}
+
+/**
+ * GLSL packing the value `v` (a 4 component vector) into the words `w[0..words-1]`, and
+ * unpacking the words into `v`, for the texel layout.
+ */
+static void wg_texel_pack_glsl(const WGTexelLayout &layout, std::string &r_pack, std::string &r_unpack)
+{
+  using Kind = WGTexelLayout::Kind;
+  const int n = layout.components;
+  std::string pack, unpack;
+  auto comp = [](const int i) { return std::string(1, "xyzw"[i]); };
+  switch (layout.kind) {
+    case Kind::Float32:
+      for (int i = 0; i < n; i++) {
+        pack += "w[" + std::to_string(i) + "] = floatBitsToUint(v." + comp(i) + ");";
+        unpack += "v." + comp(i) + " = uintBitsToFloat(w[" + std::to_string(i) + "]);";
+      }
+      break;
+    case Kind::Uint32:
+      for (int i = 0; i < n; i++) {
+        pack += "w[" + std::to_string(i) + "] = v." + comp(i) + ";";
+        unpack += "v." + comp(i) + " = w[" + std::to_string(i) + "];";
+      }
+      break;
+    case Kind::Sint32:
+      for (int i = 0; i < n; i++) {
+        pack += "w[" + std::to_string(i) + "] = uint(v." + comp(i) + ");";
+        unpack += "v." + comp(i) + " = int(w[" + std::to_string(i) + "]);";
+      }
+      break;
+    case Kind::Float16:
+    case Kind::Unorm16:
+    case Kind::Snorm16: {
+      const std::string fn = layout.kind == Kind::Float16 ? "Half2x16" :
+                             layout.kind == Kind::Unorm16 ? "Unorm2x16" :
+                                                            "Snorm2x16";
+      for (int i = 0; i < n; i += 2) {
+        const std::string second = (i + 1 < n) ? "v." + comp(i + 1) : "0.0";
+        const std::string word = "w[" + std::to_string(i / 2) + "]";
+        pack += word + " = pack" + fn + "(vec2(v." + comp(i) + ", " + second + "));";
+        unpack += "{ vec2 u = unpack" + fn + "(" + word + "); v." + comp(i) + " = u.x;";
+        if (i + 1 < n) {
+          unpack += " v." + comp(i + 1) + " = u.y;";
+        }
+        unpack += " }";
+      }
+      break;
+    }
+    case Kind::Uint16:
+    case Kind::Sint16:
+      for (int i = 0; i < n; i += 2) {
+        const std::string word = "w[" + std::to_string(i / 2) + "]";
+        const std::string second = (i + 1 < n) ? "(uint(v." + comp(i + 1) + ") << 16u)" : "0u";
+        pack += word + " = (uint(v." + comp(i) + ") & 0xFFFFu) | " + second + ";";
+        if (layout.kind == Kind::Uint16) {
+          unpack += "v." + comp(i) + " = " + word + " & 0xFFFFu;";
+          if (i + 1 < n) {
+            unpack += "v." + comp(i + 1) + " = " + word + " >> 16u;";
+          }
+        }
+        else {
+          unpack += "v." + comp(i) + " = (int(" + word + " << 16u) >> 16);";
+          if (i + 1 < n) {
+            unpack += "v." + comp(i + 1) + " = (int(" + word + ") >> 16);";
+          }
+        }
+      }
+      break;
+    case Kind::Unorm8:
+    case Kind::Snorm8: {
+      const char *fn = layout.kind == Kind::Unorm8 ? "Unorm4x8" : "Snorm4x8";
+      std::string vec = "vec4(";
+      for (int i = 0; i < 4; i++) {
+        vec += (i < n ? "v." + comp(i) : std::string("0.0")) + (i < 3 ? ", " : ")");
+      }
+      pack += "w[0] = pack" + std::string(fn) + "(" + vec + ");";
+      unpack += "{ vec4 u = unpack" + std::string(fn) + "(w[0]);";
+      for (int i = 0; i < n; i++) {
+        unpack += " v." + comp(i) + " = u." + comp(i) + ";";
+      }
+      unpack += " }";
+      break;
+    }
+    case Kind::Uint8:
+    case Kind::Sint8:
+      pack += "w[0] = 0u;";
+      for (int i = 0; i < n; i++) {
+        const std::string shift = std::to_string(i * 8) + "u";
+        pack += "w[0] |= (uint(v." + comp(i) + ") & 0xFFu) << " + shift + ";";
+        if (layout.kind == Kind::Uint8) {
+          unpack += "v." + comp(i) + " = (w[0] >> " + shift + ") & 0xFFu;";
+        }
+        else {
+          unpack += "v." + comp(i) + " = (int(w[0] << " + std::to_string(24 - i * 8) + "u) >> 24);";
+        }
+      }
+      break;
+    case Kind::UFloat11_11_10:
+      /* Half floats share the exponent bias, drop the low mantissa bits. */
+      pack += "{ uint h0 = packHalf2x16(vec2(max(v.x, 0.0), max(v.y, 0.0)));";
+      pack += " uint h2 = packHalf2x16(vec2(max(v.z, 0.0), 0.0));";
+      pack += " w[0] = ((h0 >> 4u) & 0x7FFu) | (((h0 >> 20u) & 0x7FFu) << 11u) | (((h2 >> 6u) & 0x3FFu) << 22u); }";
+      unpack += "{ vec2 u = unpackHalf2x16(((w[0] & 0x7FFu) << 4u) | (((w[0] >> 11u) & 0x7FFu) << 20u));";
+      unpack += " v.x = u.x; v.y = u.y; v.z = unpackHalf2x16((w[0] >> 22u) << 6u).x; }";
+      break;
+    case Kind::Unorm10_10_10_2:
+      pack += "{ uvec4 q = uvec4(round(clamp(v, 0.0, 1.0) * vec4(1023.0, 1023.0, 1023.0, 3.0)));";
+      pack += " w[0] = q.x | (q.y << 10u) | (q.z << 20u) | (q.w << 30u); }";
+      unpack += "v = vec4(w[0] & 1023u, (w[0] >> 10u) & 1023u, (w[0] >> 20u) & 1023u, w[0] >> 30u) / vec4(1023.0, 1023.0, 1023.0, 3.0);";
+      break;
+    case Kind::Uint10_10_10_2:
+      pack += "w[0] = (v.x & 1023u) | ((v.y & 1023u) << 10u) | ((v.z & 1023u) << 20u) | ((v.w & 3u) << 30u);";
+      unpack += "v = uvec4(w[0] & 1023u, (w[0] >> 10u) & 1023u, (w[0] >> 20u) & 1023u, w[0] >> 30u);";
+      break;
+  }
+  r_pack = pack;
+  r_unpack = unpack;
+}
+
+/**
+ * Declaration of an image emulated with a buffer and the helpers replacing the image
+ * functions (see #wg_rewrite_image_calls). Lines are macro continuations.
+ */
+static void print_buffer_image(std::ostream &os,
+                               const uint32_t binding,
+                               const int vertex_alias_binding,
+                               const ImageType image_type,
+                               const Qualifier qualifiers,
+                               const TextureFormat image_format,
+                               const std::string &name,
+                               const bool is_sampler)
+{
+  WGTexelLayout layout;
+  if (!wg_texel_layout_get(image_format, layout)) {
+    BLI_assert_unreachable();
+    return;
+  }
+  const std::string buf = name + "_wg_buf";
+  const std::string meta = name + "_wg_meta";
+  const std::string prefix = wg_image_vector_prefix(image_type);
+  const std::string vec4 = prefix + "vec4";
+  const int coord_size = wg_image_coord_size(image_type);
+  const std::string coord = wg_ivec(coord_size);
+  /* The buffer is `int` for atomics on signed images, `uint` otherwise. */
+  const std::string elem = layout.kind == WGTexelLayout::Kind::Sint32 ? "int" : "uint";
+  const bool writable = flag_is_set(qualifiers, Qualifier::write);
+  const std::string nl = " \\\n";
+
+  if (vertex_alias_binding >= 0) {
+    os << "layout(binding = wg_binding_" << name << ", std430) wg_qualifier_" << name;
+  }
+  else {
+    os << "layout(binding = " << binding << ", std430) " << (writable ? "" : "readonly ");
+  }
+  os << " buffer _" << buf << " { " << elem << " " << buf << "[]; };" << nl;
+
+  /* Index of the first word of a texel. */
+  os << "uint " << name << "_wg_index(" << coord << " co) { return (uint(co.x)";
+  if (coord_size >= 2) {
+    os << " + uint(co.y) * " << meta << ".x";
+  }
+  if (coord_size >= 3) {
+    os << " + uint(co.z) * " << meta << ".x * " << meta << ".y";
+  }
+  os << ") * " << layout.words << "u; }" << nl;
+  /* Size. */
+  os << coord << " " << name << "_wg_" << (is_sampler ? "textureSize(int lod)" : "imageSize()")
+     << " { return " << coord << "(" << meta << (coord_size == 1 ? ".x" :
+                                                 coord_size == 2 ? ".xy" :
+                                                                   ".xyz")
+     << "); }" << nl;
+
+  std::string pack, unpack;
+  wg_texel_pack_glsl(layout, pack, unpack);
+  /* Load. */
+  os << vec4 << " " << name << "_wg_" << (is_sampler ? "texelFetch" : "imageLoad") << "(" << coord
+     << " co" << (is_sampler ? ", int lod" : "") << ") { uint i = " << name
+     << "_wg_index(co); uint w[" << layout.words << "];";
+  for (int k = 0; k < layout.words; k++) {
+    os << " w[" << k << "] = uint(" << buf << "[i + " << k << "u]);";
+  }
+  os << " " << vec4 << " v = " << vec4 << "(0, 0, 0, 1); " << unpack << " return v; }" << nl;
+  /* Store. */
+  if (writable && !is_sampler) {
+    os << "void " << name << "_wg_imageStore(" << coord << " co, " << vec4 << " v) { uint i = "
+       << name << "_wg_index(co); uint w[" << layout.words << "]; " << pack;
+    for (int k = 0; k < layout.words; k++) {
+      os << " " << buf << "[i + " << k << "u] = " << elem << "(w[" << k << "]);";
+    }
+    os << " }" << nl;
+  }
+  /* Atomics, on 32 bit integer images. */
+  if (writable && !is_sampler && layout.words == 1 &&
+      ELEM(layout.kind, WGTexelLayout::Kind::Uint32, WGTexelLayout::Kind::Sint32))
+  {
+    for (const char *op : {"Add", "Min", "Max", "And", "Or", "Xor", "Exchange"}) {
+      os << elem << " " << name << "_wg_imageAtomic" << op << "(" << coord << " co, " << elem
+         << " v) { return atomic" << op << "(" << buf << "[" << name << "_wg_index(co)], v); }"
+         << nl;
+    }
+    os << elem << " " << name << "_wg_imageAtomicCompSwap(" << coord << " co, " << elem
+       << " c, " << elem << " v) { return atomicCompSwap(" << buf << "[" << name
+       << "_wg_index(co)], c, v); }" << nl;
+  }
+}
+
+/** Declaration of an image bound as a texture and the helpers fetching it. */
+static void print_sampled_image(std::ostream &os,
+                                const uint32_t binding,
+                                const ImageType image_type,
+                                const std::string &name)
+{
+  const std::string prefix = wg_image_vector_prefix(image_type);
+  const int coord_size = wg_image_coord_size(image_type);
+  const std::string coord = wg_ivec(coord_size);
+  const std::string nl = " \\\n";
+  os << "layout(binding = " << binding << ") uniform ";
+  print_image_type(os, image_type, ShaderCreateInfo::Resource::BindType::SAMPLER);
+  os << name << ";" << nl;
+  os << prefix << "vec4 " << name << "_wg_imageLoad(" << coord << " co) { return texelFetch("
+     << name << ", co, 0); }" << nl;
+  os << coord << " " << name << "_wg_imageSize() { return textureSize(" << name << ", 0); }"
+     << nl;
+}
+
+/**
+ * Replace `function(NAME, args...)` by `NAME_wg_function(args...)` for the given names
+ * (any whitespace allowed inside the parentheses).
+ */
+static void wg_rewrite_image_calls(std::string &glsl,
+                                   const StringRef function,
+                                   const Set<std::string> &names)
+{
+  const std::string pattern = function + "(";
+  size_t pos = 0;
+  while ((pos = glsl.find(pattern, pos)) != std::string::npos) {
+    if (pos > 0 && wg_is_identifier_char(glsl[pos - 1])) {
+      pos += pattern.size();
+      continue;
+    }
+    size_t arg_start = pos + pattern.size();
+    while (arg_start < glsl.size() && isspace(glsl[arg_start])) {
+      arg_start++;
+    }
+    size_t arg_end = arg_start;
+    while (arg_end < glsl.size() && wg_is_identifier_char(glsl[arg_end])) {
+      arg_end++;
+    }
+    size_t next = arg_end;
+    while (next < glsl.size() && isspace(glsl[next])) {
+      next++;
+    }
+    const std::string name = glsl.substr(arg_start, arg_end - arg_start);
+    if (next < glsl.size() && ELEM(glsl[next], ',', ')') && names.contains(name)) {
+      /* Skip the comma and the spaces after it. */
+      size_t args = next;
+      if (glsl[args] == ',') {
+        args++;
+        while (args < glsl.size() && isspace(glsl[args])) {
+          args++;
+        }
+      }
+      const std::string replacement = name + "_wg_" + function + "(";
+      glsl.replace(pos, args - pos, replacement);
+      pos += replacement.size();
+      continue;
+    }
+    pos += pattern.size();
+  }
+}
+
+/** \} */
+
 static void print_resource(std::ostream &os,
                            const uint32_t binding,
+                           const int vertex_alias_binding,
                            const ShaderCreateInfo::Resource &res)
 {
-  os << "layout(binding = " << binding;
+  /* Resources with a vertex stage alias take their binding and qualifier from the macros
+   * defined by #WGShader::resources_declare. */
+  const bool use_macros = vertex_alias_binding >= 0;
+  const std::string name = resource_name(res);
+  if (ELEM(res.bind_type,
+           ShaderCreateInfo::Resource::BindType::IMAGE,
+           ShaderCreateInfo::Resource::BindType::SAMPLER))
+  {
+    const WGImageMode mode = WGShaderInterface::image_mode(res);
+    if (mode == WGImageMode::Buffer) {
+      const bool is_sampler = res.bind_type == ShaderCreateInfo::Resource::BindType::SAMPLER;
+      const ImageType type = is_sampler ? res.sampler.type : res.image.type;
+      const bool is_signed = ELEM(
+          type, ImageType::AtomicInt2D, ImageType::AtomicInt2DArray, ImageType::AtomicInt3D);
+      const bool is_atomic = ELEM(type,
+                                  ImageType::AtomicUint2D,
+                                  ImageType::AtomicUint2DArray,
+                                  ImageType::AtomicUint3D,
+                                  ImageType::AtomicInt2D,
+                                  ImageType::AtomicInt2DArray,
+                                  ImageType::AtomicInt3D);
+      const TextureFormat format = is_atomic ?
+                                       (is_signed ? TextureFormat::SINT_32 :
+                                                    TextureFormat::UINT_32) :
+                                       wg_device_format(TextureFormat(res.image.format));
+      print_buffer_image(os,
+                         binding,
+                         vertex_alias_binding,
+                         type,
+                         is_sampler ? Qualifier::read : res.image.qualifiers,
+                         format,
+                         is_sampler ? res.sampler.name : res.image.name,
+                         is_sampler);
+      return;
+    }
+    if (mode == WGImageMode::Sampled) {
+      print_sampled_image(os, binding, res.image.type, res.image.name);
+      return;
+    }
+  }
+  if (use_macros) {
+    os << "layout(binding = wg_binding_" << name;
+  }
+  else {
+    os << "layout(binding = " << binding;
+  }
   if (res.bind_type == ShaderCreateInfo::Resource::BindType::IMAGE) {
     os << ", " << to_string(res.image.format);
   }
@@ -370,7 +755,12 @@ static void print_resource(std::ostream &os,
       break;
     case ShaderCreateInfo::Resource::BindType::IMAGE:
       os << "uniform ";
-      print_qualifier(os, res.image.qualifiers, false);
+      if (use_macros) {
+        os << "wg_qualifier_" << name << " ";
+      }
+      else {
+        print_qualifier(os, res.image.qualifiers, false);
+      }
       print_image_type(os, res.image.type, res.bind_type);
       os << res.image.name << ";";
       break;
@@ -379,7 +769,12 @@ static void print_resource(std::ostream &os,
          << " " << res.uniformbuf.name << "; };";
       break;
     case ShaderCreateInfo::Resource::BindType::STORAGE_BUFFER:
-      print_qualifier(os, res.storagebuf.qualifiers, true);
+      if (use_macros) {
+        os << "wg_qualifier_" << name << " ";
+      }
+      else {
+        print_qualifier(os, res.storagebuf.qualifiers, true);
+      }
       os << "buffer _" << res.storagebuf.name.str_no_array() << " { " << res.storagebuf.type_name
          << " " << res.storagebuf.name << "; };";
       break;
@@ -398,8 +793,45 @@ static void print_resource(std::ostream &os,
   if (assign_if_different(active_info_name, res.info_name)) {
     os << "\n#define CREATE_INFO_RES_" << res_frequency << "_" << res.info_name << " \\\n";
   }
-  print_resource(os, shader_interface.binding_get(res), res);
+  print_resource(
+      os, shader_interface.binding_get(res), shader_interface.vertex_alias_binding_get(res), res);
   os << " \\\n";
+}
+
+/**
+ * Macros giving writable resources a read-only alias binding in the vertex stage (WebGPU
+ * doesn't allow writable storage there). Preprocessor directives can't be inside the
+ * `CREATE_INFO_RES_` macros, so they are defined before them.
+ */
+static void print_vertex_alias_macros(std::ostream &os,
+                                      const WGShaderInterface &shader_interface,
+                                      const ShaderCreateInfo::Resource &res)
+{
+  const int alias = shader_interface.vertex_alias_binding_get(res);
+  if (alias < 0) {
+    return;
+  }
+  std::stringstream qualifier;
+  if (res.bind_type == ShaderCreateInfo::Resource::BindType::IMAGE) {
+    if (WGShaderInterface::image_mode(res) == WGImageMode::Buffer) {
+      /* The buffer is read by the helpers even for write-only images. */
+      qualifier << (flag_is_set(res.image.qualifiers, Qualifier::write) ? "" : "readonly");
+    }
+    else {
+      print_qualifier(qualifier, res.image.qualifiers, false);
+    }
+  }
+  else if (res.bind_type == ShaderCreateInfo::Resource::BindType::STORAGE_BUFFER) {
+    print_qualifier(qualifier, res.storagebuf.qualifiers, true);
+  }
+  const std::string name = resource_name(res);
+  os << "#ifdef GPU_VERTEX_SHADER\n";
+  os << "#define wg_binding_" << name << " " << alias << "\n";
+  os << "#define wg_qualifier_" << name << " readonly\n";
+  os << "#else\n";
+  os << "#define wg_binding_" << name << " " << shader_interface.binding_get(res) << "\n";
+  os << "#define wg_qualifier_" << name << " " << qualifier.str() << "\n";
+  os << "#endif\n";
 }
 
 inline int get_location_count(const Type &type)
@@ -528,6 +960,15 @@ std::string WGShader::resources_declare(const ShaderCreateInfo &info) const
     }
   }
 
+  for (const Span<ShaderCreateInfo::Resource> resources :
+       {info.pass_resources_.as_span(),
+        info.batch_resources_.as_span(),
+        info.geometry_resources_.as_span()})
+  {
+    for (const ShaderCreateInfo::Resource &res : resources) {
+      print_vertex_alias_macros(ss, wg_interface, res);
+    }
+  }
   {
     StringRefNull active_info = "";
     for (const ShaderCreateInfo::SharedVariable &sv : info.shared_variables_) {
@@ -561,7 +1002,7 @@ std::string WGShader::resources_declare(const ShaderCreateInfo &info) const
     ss << "\n";
   }
   /* Push constants, stored in a uniform buffer. */
-  if (!info.push_constants_.is_empty()) {
+  if (!info.push_constants_.is_empty() || wg_interface.has_buffer_images()) {
     ss << "layout(binding = " << wg_interface.push_constants_binding_get()
        << ", std140) uniform constants\n";
     ss << "{\n";
@@ -571,6 +1012,29 @@ std::string WGShader::resources_declare(const ShaderCreateInfo &info) const
         ss << "[" << uniform.array_size << "]";
       }
       ss << ";\n";
+    }
+    /* Sizes of the emulated images, in the order of #WGShaderInterface::resources(). */
+    for (const WGResourceBinding &resource : wg_interface.resources()) {
+      if (resource.type != WGResourceBinding::Type::BufferImage || resource.vertex_alias) {
+        continue;
+      }
+      for (const Span<ShaderCreateInfo::Resource> resources :
+           {info.pass_resources_.as_span(),
+            info.batch_resources_.as_span(),
+            info.geometry_resources_.as_span()})
+      {
+        for (const ShaderCreateInfo::Resource &res : resources) {
+          const bool is_sampler = res.bind_type == ShaderCreateInfo::Resource::BindType::SAMPLER;
+          if (res.slot == resource.slot && is_sampler == resource.sampler_slot &&
+              ELEM(res.bind_type,
+                   ShaderCreateInfo::Resource::BindType::IMAGE,
+                   ShaderCreateInfo::Resource::BindType::SAMPLER) &&
+              WGShaderInterface::image_mode(res) == WGImageMode::Buffer)
+          {
+            ss << "  uvec4 " << resource_name(res) << "_wg_meta;\n";
+          }
+        }
+      }
     }
     ss << "};\n";
   }
@@ -710,7 +1174,7 @@ std::string WGShader::fragment_interface_declare(const ShaderCreateInfo &info) c
     Resource res(info, Resource::BindType::SAMPLER, input.index, nullptr);
     res.sampler.type = input.img_type;
     res.sampler.name = image_name;
-    print_resource(ss, wg_interface.subpass_input_binding_get(input.index), res);
+    print_resource(ss, wg_interface.subpass_input_binding_get(input.index), -1, res);
     ss << "\n";
 
     char swizzle[] = "xyzw";
@@ -725,7 +1189,14 @@ std::string WGShader::fragment_interface_declare(const ShaderCreateInfo &info) c
   }
 
   /* Outputs. */
+  const bool dual_source_blending = WGBackend::get().device.info().dual_source_blending;
   for (const ShaderCreateInfo::FragOut &output : info.fragment_outputs_) {
+    if (output.blend == DualBlend::SRC_1 && !dual_source_blending) {
+      /* Without the feature the second source is dropped, the blending is approximated
+       * (see #wg_blend_state). */
+      ss << to_string(output.type) << " " << output.name << ";\n";
+      continue;
+    }
     ss << "layout(location = " << output.index;
     switch (output.blend) {
       case DualBlend::SRC_0:
@@ -962,6 +1433,48 @@ static bool wg_is_integer_image_type(const ImageType type)
 /** Source changes for constructs WGSL or Tint don't support. */
 static void wg_glsl_workarounds(const ShaderCreateInfo &info, std::string &glsl)
 {
+  /* Emulated images (see #WGImageMode): their image functions become the helpers. */
+  Set<std::string> emulated_images, emulated_samplers;
+  for (const Span<ShaderCreateInfo::Resource> resources :
+       {info.pass_resources_.as_span(),
+        info.batch_resources_.as_span(),
+        info.geometry_resources_.as_span()})
+  {
+    for (const ShaderCreateInfo::Resource &res : resources) {
+      if (res.bind_type == ShaderCreateInfo::Resource::BindType::IMAGE &&
+          WGShaderInterface::image_mode(res) != WGImageMode::Native)
+      {
+        emulated_images.add(res.image.name);
+      }
+      else if (res.bind_type == ShaderCreateInfo::Resource::BindType::SAMPLER &&
+               WGShaderInterface::image_mode(res) == WGImageMode::Buffer)
+      {
+        emulated_samplers.add(res.sampler.name);
+      }
+    }
+  }
+  if (!emulated_images.is_empty()) {
+    for (const char *function : {"imageLoad",
+                                 "imageStore",
+                                 "imageSize",
+                                 "imageAtomicAdd",
+                                 "imageAtomicMin",
+                                 "imageAtomicMax",
+                                 "imageAtomicAnd",
+                                 "imageAtomicOr",
+                                 "imageAtomicXor",
+                                 "imageAtomicExchange",
+                                 "imageAtomicCompSwap"})
+    {
+      wg_rewrite_image_calls(glsl, function, emulated_images);
+    }
+  }
+  if (!emulated_samplers.is_empty()) {
+    for (const char *function : {"texelFetch", "textureSize"}) {
+      wg_rewrite_image_calls(glsl, function, emulated_samplers);
+    }
+  }
+
   Set<std::string> integer_samplers;
   for (const Span<ShaderCreateInfo::Resource> resources :
        {info.pass_resources_.as_span(),
@@ -1062,6 +1575,13 @@ static bool glsl_uses_integer_samplers(const ShaderCreateInfo &info)
   return false;
 }
 
+/** Copy the shader name into the label of a creation command. */
+template<typename T> static T wg_labeled(T cmd, const char *name)
+{
+  BLI_strncpy(cmd.label, name, sizeof(cmd.label));
+  return cmd;
+}
+
 /** Samplers use the binding of their texture in the sampler group. */
 static Vector<WSC_SamplerMapping> wg_sampler_mappings(const WGShaderInterface &interface)
 {
@@ -1069,12 +1589,34 @@ static Vector<WSC_SamplerMapping> wg_sampler_mappings(const WGShaderInterface &i
   for (const WGResourceBinding &resource : interface.resources()) {
     if (ELEM(resource.type,
              WGResourceBinding::Type::Sampler,
-             WGResourceBinding::Type::SubpassInput))
+             WGResourceBinding::Type::SubpassInput) ||
+        resource.image_as_texture)
     {
       sampler_mappings.append({0, resource.binding, WG_SAMPLER_GROUP, resource.binding});
     }
   }
   return sampler_mappings;
+}
+
+/** Blender's preprocessor requires sources without comments. */
+static std::string wg_strip_comments(const std::string &source)
+{
+  std::string result;
+  result.reserve(source.size());
+  for (size_t i = 0; i < source.size();) {
+    if (source[i] == '/' && i + 1 < source.size() && source[i + 1] == '*') {
+      const size_t end = source.find("*/", i + 2);
+      i = (end == std::string::npos) ? source.size() : end + 2;
+      continue;
+    }
+    if (source[i] == '/' && i + 1 < source.size() && source[i + 1] == '/') {
+      const size_t end = source.find('\n', i);
+      i = (end == std::string::npos) ? source.size() : end;
+      continue;
+    }
+    result += source[i++];
+  }
+  return result;
 }
 
 /** Add a define after the `#version` line. */
@@ -1085,8 +1627,11 @@ static std::string wg_glsl_define(const std::string &glsl, const char *define)
 }
 
 /** Translate GLSL to a WGSL module, for variants (errors are only logged). */
-WGObjectID WGShader::module_from_glsl(const std::string &glsl, const int stage)
+WGObjectID WGShader::module_from_glsl(const std::string &source, const int stage)
 {
+  const std::string glsl = skip_preprocessor ? source :
+                                               run_preprocessor(wg_strip_comments(source),
+                                                                G.debug & G_DEBUG_GPU_SHADER_NO_DCE);
   const Vector<WSC_SamplerMapping> sampler_mappings = wg_sampler_mappings(interface_get());
   WSC_Result result = WSC_glsl_to_wgsl(glsl.c_str(),
                                        WSC_Stage(stage),
@@ -1104,7 +1649,7 @@ WGObjectID WGShader::module_from_glsl(const std::string &glsl, const int stage)
   {
     WGRecord record;
     record.stream.push(WGCommandType::CreateShaderModule,
-                       WGCmdCreateShaderModule{module},
+                       wg_labeled(WGCmdCreateShaderModule{module}, name),
                        result.wgsl,
                        strlen(result.wgsl) + 1);
   }
@@ -1160,6 +1705,11 @@ void WGShader::build_module(const ShaderCreateInfo &info,
       point_vertex_glsl_.clear();
     }
   }
+  /* Evaluate static branches (`#if` on constants) and remove dead code, like the other
+   * back-ends. The point variants are preprocessed when they are built. */
+  if (!skip_preprocessor) {
+    glsl = run_preprocessor(wg_strip_comments(glsl), G.debug & G_DEBUG_GPU_SHADER_NO_DCE);
+  }
 
   const Vector<WSC_SamplerMapping> sampler_mappings = wg_sampler_mappings(interface_get());
   WSC_Result result = WSC_glsl_to_wgsl(glsl.c_str(),
@@ -1196,7 +1746,7 @@ void WGShader::build_module(const ShaderCreateInfo &info,
   {
     WGRecord record;
     record.stream.push(WGCommandType::CreateShaderModule,
-                       WGCmdCreateShaderModule{r_module},
+                       wg_labeled(WGCmdCreateShaderModule{r_module}, name),
                        result.wgsl,
                        strlen(result.wgsl) + 1);
   }
@@ -1239,7 +1789,8 @@ bool WGShader::finalize(const ShaderCreateInfo *info)
     group_entries[0].append(resource.layout);
     if (ELEM(resource.type,
              WGResourceBinding::Type::Sampler,
-             WGResourceBinding::Type::SubpassInput))
+             WGResourceBinding::Type::SubpassInput) ||
+        resource.image_as_texture)
     {
       WGBindingLayout sampler = {};
       sampler.binding = resource.binding;
@@ -1255,13 +1806,14 @@ bool WGShader::finalize(const ShaderCreateInfo *info)
   for (int group : IndexRange(2)) {
     bind_group_layouts_[group] = wg_object_id_alloc();
     record.stream.push(WGCommandType::CreateBindGroupLayout,
-                       WGCmdCreateBindGroupLayout{bind_group_layouts_[group],
-                                                  uint32_t(group_entries[group].size())},
+                       wg_labeled(WGCmdCreateBindGroupLayout{bind_group_layouts_[group],
+                                                             uint32_t(group_entries[group].size())},
+                                  name),
                        group_entries[group].data(),
                        group_entries[group].size() * sizeof(WGBindingLayout));
   }
   pipeline_layout_ = wg_object_id_alloc();
-  WGCmdCreatePipelineLayout cmd = {};
+  WGCmdCreatePipelineLayout cmd = wg_labeled(WGCmdCreatePipelineLayout{}, name);
   cmd.layout = pipeline_layout_;
   cmd.bind_group_layouts[0] = bind_group_layouts_[0];
   cmd.bind_group_layouts[1] = bind_group_layouts_[1];
@@ -1524,10 +2076,19 @@ static void wg_blend_state(const GPUBlend blend,
           F::WGPUBlendFactor_One);
       break;
     case GPU_BLEND_CUSTOM:
-      set(F::WGPUBlendFactor_One,
-          F::WGPUBlendFactor_Src1,
-          F::WGPUBlendFactor_One,
-          F::WGPUBlendFactor_Src1Alpha);
+      if (WGBackend::get().device.info().dual_source_blending) {
+        set(F::WGPUBlendFactor_One,
+            F::WGPUBlendFactor_Src1,
+            F::WGPUBlendFactor_One,
+            F::WGPUBlendFactor_Src1Alpha);
+      }
+      else {
+        /* Approximation without the second source (its value is unknown). */
+        set(F::WGPUBlendFactor_One,
+            F::WGPUBlendFactor_OneMinusSrcAlpha,
+            F::WGPUBlendFactor_One,
+            F::WGPUBlendFactor_OneMinusSrcAlpha);
+      }
       break;
     case GPU_BLEND_OVERLAY_MASK_FROM_ALPHA:
       set(F::WGPUBlendFactor_Zero,
@@ -1567,7 +2128,7 @@ WGObjectID WGShader::render_pipeline_get(const WGRenderPipelineKey &key,
   }
 
   const GPUState state{.data = key.state};
-  WGCmdCreateRenderPipeline cmd = {};
+  WGCmdCreateRenderPipeline cmd = wg_labeled(WGCmdCreateRenderPipeline{}, name);
   cmd.pipeline = wg_object_id_alloc();
   cmd.layout = point_variant ? point_variant->pipeline_layout : pipeline_layout_;
   cmd.vertex_module = point_variant ? point_variant->vertex_module : vertex_module_;
@@ -1671,7 +2232,7 @@ WGObjectID WGShader::compute_pipeline_get(const SpecializationConstants *constan
   if (const WGObjectID *pipeline = compute_pipelines_.lookup_ptr(key)) {
     return *pipeline;
   }
-  WGCmdCreateComputePipeline cmd = {};
+  WGCmdCreateComputePipeline cmd = wg_labeled(WGCmdCreateComputePipeline{}, name);
   cmd.pipeline = wg_object_id_alloc();
   cmd.layout = pipeline_layout_;
   cmd.module = compute_module_;
@@ -1925,11 +2486,12 @@ std::unique_ptr<WGPointVariant> WGShader::point_variant_create(const WGVertexLay
   variant->bind_group_layout = wg_object_id_alloc();
   record.stream.push(
       WGCommandType::CreateBindGroupLayout,
-      WGCmdCreateBindGroupLayout{variant->bind_group_layout, uint32_t(entries.size())},
+      wg_labeled(WGCmdCreateBindGroupLayout{variant->bind_group_layout, uint32_t(entries.size())},
+                 name),
       entries.data(),
       entries.size() * sizeof(WGBindingLayout));
   variant->pipeline_layout = wg_object_id_alloc();
-  WGCmdCreatePipelineLayout cmd = {};
+  WGCmdCreatePipelineLayout cmd = wg_labeled(WGCmdCreatePipelineLayout{}, name);
   cmd.layout = variant->pipeline_layout;
   cmd.bind_group_layouts[0] = variant->bind_group_layout;
   cmd.bind_group_layouts[1] = bind_group_layouts_[1];

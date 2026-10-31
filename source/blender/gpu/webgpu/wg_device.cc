@@ -16,6 +16,7 @@
 #include "BLI_assert.hh"
 #include "BLI_vector.hh"
 
+#include "wg_common.hh"
 #include "wg_device.hh"
 
 namespace blender::gpu {
@@ -374,7 +375,9 @@ WGPUBindGroup WGDevice::bind_group_create(WGObjectID pipeline_layout,
       case WGBindingLayout::Kind::UniformBuffer:
       case WGBindingLayout::Kind::StorageBuffer:
       case WGBindingLayout::Kind::ReadOnlyStorageBuffer:
-        entry.buffer = buffer_get(resource.object, state);
+        entry.buffer = resource.buffer_image ?
+                           buffer_image_get(resource.object, resource.base_mip) :
+                           buffer_get(resource.object, state);
         entry.offset = resource.offset;
         entry.size = resource.size ? resource.size : WGPU_WHOLE_SIZE;
         break;
@@ -661,6 +664,7 @@ void WGDevice::execute_create_render_pipeline(const WGCmdCreateRenderPipeline &c
   }
 
   WGPURenderPipelineDescriptor desc = {};
+  desc.label = wg_string(cmd.label);
   desc.layout = layout->layout;
   desc.vertex.module = vertex_module;
   desc.vertex.entryPoint = wg_string("main");
@@ -724,6 +728,12 @@ void WGDevice::destroy_object(WGObjectID id)
   else if (std::optional<TextureEntry> texture = textures_.pop_try(id)) {
     wgpuTextureDestroy(texture->texture);
     wgpuTextureRelease(texture->texture);
+    for (uint32_t mip = 0; mip < texture->mip_count; mip++) {
+      if (WGPUBuffer buffer = buffer_images_.pop_default((uint64_t(id) << 8) | mip, nullptr)) {
+        wgpuBufferDestroy(buffer);
+        wgpuBufferRelease(buffer);
+      }
+    }
   }
   else if (WGPUSampler sampler = samplers_.pop_default(id, nullptr)) {
     wgpuSamplerRelease(sampler);
@@ -882,6 +892,7 @@ void WGDevice::execute(WGCommandStream &stream, void *wait_ctx)
         TextureEntry entry;
         entry.texture = wgpuDeviceCreateTexture(device_, &desc);
         entry.format = cmd.format;
+        entry.blender_format = cmd.blender_format;
         entry.dimension = cmd.dimension;
         entry.mip_count = cmd.mip_count;
         entry.layers = cmd.depth_or_layers;
@@ -914,6 +925,7 @@ void WGDevice::execute(WGCommandStream &stream, void *wait_ctx)
         source.code = wg_string(reinterpret_cast<const char *>(TRAILING(WGCmdCreateShaderModule)));
         WGPUShaderModuleDescriptor desc = {};
         desc.nextInChain = &source.chain;
+        desc.label = wg_string(cmd.label);
         shader_modules_.add_overwrite(cmd.module, wgpuDeviceCreateShaderModule(device_, &desc));
         break;
       }
@@ -926,6 +938,7 @@ void WGDevice::execute(WGCommandStream &stream, void *wait_ctx)
           entries.append(wg_bind_group_layout_entry(binding));
         }
         WGPUBindGroupLayoutDescriptor desc = {};
+        desc.label = wg_string(cmd.label);
         desc.entryCount = entries.size();
         desc.entries = entries.data();
         bind_group_layouts_.add_overwrite(cmd.layout,
@@ -942,6 +955,7 @@ void WGDevice::execute(WGCommandStream &stream, void *wait_ctx)
           layouts[i] = entry.groups[i];
         }
         WGPUPipelineLayoutDescriptor desc = {};
+        desc.label = wg_string(cmd.label);
         desc.bindGroupLayoutCount = 2;
         desc.bindGroupLayouts = layouts;
         entry.layout = wgpuDeviceCreatePipelineLayout(device_, &desc);
@@ -959,6 +973,7 @@ void WGDevice::execute(WGCommandStream &stream, void *wait_ctx)
         WGPUShaderModule module = shader_modules_.lookup_default(cmd.module, nullptr);
         if (layout && module) {
           WGPUComputePipelineDescriptor desc = {};
+          desc.label = wg_string(cmd.label);
           desc.layout = layout->layout;
           desc.compute.module = module;
           desc.compute.entryPoint = wg_string("main");
@@ -1149,6 +1164,10 @@ void WGDevice::execute(WGCommandStream &stream, void *wait_ctx)
         execute_present(CMD(WGCmdPresent), state);
         break;
       }
+      case WGCommandType::SyncBufferImage: {
+        execute_sync_buffer_image(CMD(WGCmdSyncBufferImage), state);
+        break;
+      }
     }
 #undef CMD
 #undef TRAILING
@@ -1176,6 +1195,10 @@ void WGDevice::execute(WGCommandStream &stream, void *wait_ctx)
   if (state.staging) {
     wgpuBufferDestroy(state.staging);
     wgpuBufferRelease(state.staging);
+  }
+  for (WGPUBuffer buffer : state.temporary_buffers) {
+    wgpuBufferDestroy(buffer);
+    wgpuBufferRelease(buffer);
   }
 
   streams_in_flight_--;
@@ -1208,6 +1231,395 @@ void WGDevice::execute(WGCommandStream &stream, void *wait_ctx)
 /** \name Internal Draws
  * \{ */
 
+static const char *WG_FULLSCREEN_VERTEX_WGSL =
+    "fn wg_fullscreen_position(i : u32) -> vec2<f32> {\n"
+    "  return vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u)) * 2.0 - 1.0;\n"
+    "}\n";
+
+/* -------------------------------------------------------------------- */
+/** \name Emulated Images
+ *
+ * See `wg_shader.hh`. The buffer of a mip level holds its texels in the layout of
+ * #wg_texel_pack_glsl (`wg_shader.cc`), the WGSL here must match it.
+ * \{ */
+
+static const char *wg_wgsl_scalar(const WGTexelLayout &layout)
+{
+  return layout.is_uint() ? "u32" : layout.is_sint() ? "i32" : "f32";
+}
+
+/** WGSL packing `v` (a `vec4`) into the words `w` and unpacking `w` into `v`. */
+static void wg_texel_pack_wgsl(const WGTexelLayout &layout,
+                               std::string &r_pack,
+                               std::string &r_unpack)
+{
+  using Kind = WGTexelLayout::Kind;
+  const int n = layout.components;
+  std::string pack, unpack;
+  auto comp = [](const int i) { return std::string(1, "xyzw"[i]); };
+  auto word = [](const int i) { return "w[" + std::to_string(i) + "]"; };
+  switch (layout.kind) {
+    case Kind::Float32:
+    case Kind::Sint32:
+      for (int i = 0; i < n; i++) {
+        pack += word(i) + " = bitcast<u32>(v." + comp(i) + ");";
+        unpack += "v." + comp(i) + " = bitcast<" + wg_wgsl_scalar(layout) + ">(" + word(i) + ");";
+      }
+      break;
+    case Kind::Uint32:
+      for (int i = 0; i < n; i++) {
+        pack += word(i) + " = v." + comp(i) + ";";
+        unpack += "v." + comp(i) + " = " + word(i) + ";";
+      }
+      break;
+    case Kind::Float16:
+    case Kind::Unorm16:
+    case Kind::Snorm16: {
+      const std::string fn = layout.kind == Kind::Float16 ? "2x16float" :
+                             layout.kind == Kind::Unorm16 ? "2x16unorm" :
+                                                            "2x16snorm";
+      for (int i = 0; i < n; i += 2) {
+        const std::string second = (i + 1 < n) ? "v." + comp(i + 1) : "0.0";
+        pack += word(i / 2) + " = pack" + fn + "(vec2<f32>(v." + comp(i) + ", " + second + "));";
+        unpack += "{ let u = unpack" + fn + "(" + word(i / 2) + "); v." + comp(i) + " = u.x;";
+        if (i + 1 < n) {
+          unpack += " v." + comp(i + 1) + " = u.y;";
+        }
+        unpack += " }";
+      }
+      break;
+    }
+    case Kind::Uint16:
+    case Kind::Sint16:
+      for (int i = 0; i < n; i += 2) {
+        const std::string bits0 = layout.kind == Kind::Uint16 ? "v." + comp(i) :
+                                                                "bitcast<u32>(v." + comp(i) + ")";
+        const std::string bits1 = (i + 1 < n) ?
+                                      (layout.kind == Kind::Uint16 ?
+                                           "(v." + comp(i + 1) + " << 16u)" :
+                                           "(bitcast<u32>(v." + comp(i + 1) + ") << 16u)") :
+                                      "0u";
+        pack += word(i / 2) + " = (" + bits0 + " & 0xFFFFu) | " + bits1 + ";";
+        if (layout.kind == Kind::Uint16) {
+          unpack += "v." + comp(i) + " = " + word(i / 2) + " & 0xFFFFu;";
+          if (i + 1 < n) {
+            unpack += "v." + comp(i + 1) + " = " + word(i / 2) + " >> 16u;";
+          }
+        }
+        else {
+          unpack += "v." + comp(i) + " = bitcast<i32>(" + word(i / 2) + " << 16u) >> 16u;";
+          if (i + 1 < n) {
+            unpack += "v." + comp(i + 1) + " = bitcast<i32>(" + word(i / 2) + ") >> 16u;";
+          }
+        }
+      }
+      break;
+    case Kind::Unorm8:
+    case Kind::Snorm8: {
+      const std::string fn = layout.kind == Kind::Unorm8 ? "4x8unorm" : "4x8snorm";
+      std::string vec = "vec4<f32>(";
+      for (int i = 0; i < 4; i++) {
+        vec += (i < n ? "v." + comp(i) : std::string("0.0")) + (i < 3 ? ", " : ")");
+      }
+      pack += "w[0] = pack" + fn + "(" + vec + ");";
+      unpack += "{ let u = unpack" + fn + "(w[0]);";
+      for (int i = 0; i < n; i++) {
+        unpack += " v." + comp(i) + " = u." + comp(i) + ";";
+      }
+      unpack += " }";
+      break;
+    }
+    case Kind::Uint8:
+    case Kind::Sint8:
+      pack += "w[0] = 0u;";
+      for (int i = 0; i < n; i++) {
+        const std::string shift = std::to_string(i * 8) + "u";
+        const std::string bits = layout.kind == Kind::Uint8 ? "v." + comp(i) :
+                                                              "bitcast<u32>(v." + comp(i) + ")";
+        pack += "w[0] = w[0] | ((" + bits + " & 0xFFu) << " + shift + ");";
+        if (layout.kind == Kind::Uint8) {
+          unpack += "v." + comp(i) + " = (w[0] >> " + shift + ") & 0xFFu;";
+        }
+        else {
+          unpack += "v." + comp(i) + " = bitcast<i32>(w[0] << " + std::to_string(24 - i * 8) +
+                    "u) >> 24u;";
+        }
+      }
+      break;
+    case Kind::UFloat11_11_10:
+      pack += "{ let h0 = pack2x16float(vec2<f32>(max(v.x, 0.0), max(v.y, 0.0)));";
+      pack += " let h2 = pack2x16float(vec2<f32>(max(v.z, 0.0), 0.0));";
+      pack += " w[0] = ((h0 >> 4u) & 0x7FFu) | (((h0 >> 20u) & 0x7FFu) << 11u) | (((h2 >> 6u) & 0x3FFu) << 22u); }";
+      unpack += "{ let u = unpack2x16float(((w[0] & 0x7FFu) << 4u) | (((w[0] >> 11u) & 0x7FFu) << 20u));";
+      unpack += " v.x = u.x; v.y = u.y; v.z = unpack2x16float((w[0] >> 22u) << 6u).x; }";
+      break;
+    case Kind::Unorm10_10_10_2:
+      pack += "{ let q = vec4<u32>(round(clamp(v, vec4<f32>(0.0), vec4<f32>(1.0)) * vec4<f32>(1023.0, 1023.0, 1023.0, 3.0)));";
+      pack += " w[0] = q.x | (q.y << 10u) | (q.z << 20u) | (q.w << 30u); }";
+      unpack += "v = vec4<f32>(vec4<u32>(w[0] & 1023u, (w[0] >> 10u) & 1023u, (w[0] >> 20u) & 1023u, w[0] >> 30u)) / vec4<f32>(1023.0, 1023.0, 1023.0, 3.0);";
+      break;
+    case Kind::Uint10_10_10_2:
+      pack += "w[0] = (v.x & 1023u) | ((v.y & 1023u) << 10u) | ((v.z & 1023u) << 20u) | ((v.w & 3u) << 30u);";
+      unpack += "v = vec4<u32>(w[0] & 1023u, (w[0] >> 10u) & 1023u, (w[0] >> 20u) & 1023u, w[0] >> 30u);";
+      break;
+  }
+  r_pack = pack;
+  r_unpack = unpack;
+}
+
+/** Size of a mip level: width, height, depth or layers. */
+static void wg_mip_size(const uint32_t width,
+                        const uint32_t height,
+                        const uint32_t depth_or_layers,
+                        const bool is_3d,
+                        const uint32_t mip,
+                        uint32_t r_size[3])
+{
+  r_size[0] = std::max(width >> mip, 1u);
+  r_size[1] = std::max(height >> mip, 1u);
+  r_size[2] = is_3d ? std::max(depth_or_layers >> mip, 1u) : depth_or_layers;
+}
+
+WGPUBuffer WGDevice::buffer_image_get(const WGObjectID texture, const uint32_t mip)
+{
+  const uint64_t key = (uint64_t(texture) << 8) | mip;
+  if (WGPUBuffer *buffer = buffer_images_.lookup_ptr(key)) {
+    return *buffer;
+  }
+  const TextureEntry *entry = textures_.lookup_ptr(texture);
+  WGTexelLayout layout;
+  if (entry == nullptr || !wg_texel_layout_get(entry->blender_format, layout)) {
+    return nullptr;
+  }
+  uint32_t size[3];
+  wg_mip_size(entry->width,
+              entry->height,
+              entry->layers,
+              entry->dimension == WGPUTextureDimension_3D,
+              mip,
+              size);
+  WGPUBufferDescriptor desc = {};
+  desc.label = wg_string("emulated image");
+  desc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopySrc | WGPUBufferUsage_CopyDst;
+  desc.size = uint64_t(size[0]) * size[1] * size[2] * layout.words * 4;
+  WGPUBuffer buffer = wgpuDeviceCreateBuffer(device_, &desc);
+  buffer_images_.add(key, buffer);
+  return buffer;
+}
+
+void WGDevice::execute_sync_buffer_image(const WGCmdSyncBufferImage &cmd, ExecuteState &state)
+{
+  const TextureEntry *entry = textures_.lookup_ptr(cmd.texture);
+  WGTexelLayout layout;
+  if (entry == nullptr || !wg_texel_layout_get(entry->blender_format, layout)) {
+    return;
+  }
+  WGPUBuffer buffer = buffer_image_get(cmd.texture, cmd.mip);
+  if (buffer == nullptr) {
+    return;
+  }
+  wg_interrupt_render_pass(state.render_pass, state.render_pass_id);
+
+  uint32_t size[3];
+  wg_mip_size(entry->width,
+              entry->height,
+              entry->layers,
+              entry->dimension == WGPUTextureDimension_3D,
+              cmd.mip,
+              size);
+  const bool is_3d = entry->dimension == WGPUTextureDimension_3D;
+  const bool is_array = !is_3d && entry->layers > 1;
+  const WGPUTextureViewDimension view_dimension = is_3d    ? WGPUTextureViewDimension_3D :
+                                                  is_array ? WGPUTextureViewDimension_2DArray :
+                                                             WGPUTextureViewDimension_2D;
+  const std::string scalar = wg_wgsl_scalar(layout);
+  const std::string key = std::to_string(int(layout.kind)) + ":" +
+                          std::to_string(layout.components) + ":" +
+                          std::to_string(int(view_dimension)) + ":" +
+                          std::to_string(int(entry->format));
+  const std::string words = std::to_string(layout.words);
+  std::string pack, unpack;
+  wg_texel_pack_wgsl(layout, pack, unpack);
+
+  /* The sizes, one entry per layer (the layer is `w`) at the uniform buffer alignment. */
+  const uint32_t stride = std::max(256u, uint32_t(info_.limits.minUniformBufferOffsetAlignment));
+  const uint32_t layers = cmd.to_buffer ? 1 : size[2];
+  WGPUBufferDescriptor meta_desc = {};
+  meta_desc.usage = WGPUBufferUsage_Uniform;
+  meta_desc.size = uint64_t(stride) * layers;
+  meta_desc.mappedAtCreation = true;
+  WGPUBuffer meta = wgpuDeviceCreateBuffer(device_, &meta_desc);
+  uint8_t *mapped = static_cast<uint8_t *>(wgpuBufferGetMappedRange(meta, 0, meta_desc.size));
+  for (uint32_t layer = 0; layer < layers; layer++) {
+    const uint32_t data[4] = {size[0], size[1], size[2], layer};
+    memcpy(mapped + layer * stride, data, sizeof(data));
+  }
+  wgpuBufferUnmap(meta);
+  state.temporary_buffers.append(meta);
+
+  if (cmd.to_buffer) {
+    WGPUComputePipeline pipeline = sync_to_buffer_pipelines_.lookup_default(key, nullptr);
+    if (pipeline == nullptr) {
+      std::string wgsl;
+      wgsl += "@group(0) @binding(0) var tex : ";
+      wgsl += is_3d ? "texture_3d<" : is_array ? "texture_2d_array<" : "texture_2d<";
+      wgsl += scalar + ">;\n";
+      wgsl += "@group(0) @binding(1) var<storage, read_write> buf : array<u32>;\n";
+      wgsl += "struct Meta { size : vec4<u32> };\n";
+      wgsl += "@group(0) @binding(2) var<uniform> meta : Meta;\n";
+      wgsl += "@compute @workgroup_size(8, 8, 1)\n";
+      wgsl += "fn main(@builtin(global_invocation_id) id : vec3<u32>) {\n";
+      wgsl += "  if (id.x >= meta.size.x || id.y >= meta.size.y || id.z >= meta.size.z) { return; }\n";
+      wgsl += "  let v : vec4<" + scalar + "> = textureLoad(tex, ";
+      wgsl += is_3d    ? "vec3<i32>(id.xyz), 0" :
+              is_array ? "vec2<i32>(id.xy), i32(id.z), 0" :
+                         "vec2<i32>(id.xy), 0";
+      wgsl += ");\n";
+      wgsl += "  var w : array<u32, " + words + ">;\n";
+      wgsl += "  " + pack + "\n";
+      wgsl += "  let i : u32 = (id.x + id.y * meta.size.x + id.z * meta.size.x * meta.size.y) * " +
+              words + "u;\n";
+      for (int k = 0; k < layout.words; k++) {
+        wgsl += "  buf[i + " + std::to_string(k) + "u] = w[" + std::to_string(k) + "];\n";
+      }
+      wgsl += "}\n";
+      WGPUShaderModule module = shader_module_create(wgsl);
+      WGPUComputePipelineDescriptor desc = {};
+      desc.label = wg_string("emulated image to buffer");
+      desc.compute.module = module;
+      desc.compute.entryPoint = wg_string("main");
+      pipeline = wgpuDeviceCreateComputePipeline(device_, &desc);
+      wgpuShaderModuleRelease(module);
+      sync_to_buffer_pipelines_.add(key, pipeline);
+    }
+    WGPUBindGroupEntry entries[3] = {};
+    entries[0].binding = 0;
+    entries[0].textureView = texture_view_get(cmd.texture,
+                                              view_dimension,
+                                              entry->format,
+                                              WGPUTextureAspect_All,
+                                              cmd.mip,
+                                              1,
+                                              0,
+                                              is_3d ? 1 : entry->layers,
+                                              state);
+    entries[1].binding = 1;
+    entries[1].buffer = buffer;
+    entries[1].size = WGPU_WHOLE_SIZE;
+    entries[2].binding = 2;
+    entries[2].buffer = meta;
+    entries[2].size = 16;
+    WGPUBindGroupLayout layout_handle = wgpuComputePipelineGetBindGroupLayout(pipeline, 0);
+    WGPUBindGroupDescriptor group_desc = {};
+    group_desc.layout = layout_handle;
+    group_desc.entryCount = 3;
+    group_desc.entries = entries;
+    WGPUBindGroup group = wgpuDeviceCreateBindGroup(device_, &group_desc);
+    wgpuBindGroupLayoutRelease(layout_handle);
+    state.bind_groups.append(group);
+
+    WGPUComputePassEncoder pass = wgpuCommandEncoderBeginComputePass(state.encoder, nullptr);
+    wgpuComputePassEncoderSetPipeline(pass, pipeline);
+    wgpuComputePassEncoderSetBindGroup(pass, 0, group, 0, nullptr);
+    wgpuComputePassEncoderDispatchWorkgroups(pass, (size[0] + 7) / 8, (size[1] + 7) / 8, size[2]);
+    wgpuComputePassEncoderEnd(pass);
+    wgpuComputePassEncoderRelease(pass);
+    return;
+  }
+
+  /* Buffer to texture: a full-screen draw per layer, the texture is the color attachment. */
+  WGPURenderPipeline pipeline = sync_to_texture_pipelines_.lookup_default(key, nullptr);
+  if (pipeline == nullptr) {
+    const std::string zero = scalar == "f32" ? "0.0" : scalar == "u32" ? "0u" : "0";
+    const std::string one = scalar == "f32" ? "1.0" : scalar == "u32" ? "1u" : "1";
+    std::string wgsl = WG_FULLSCREEN_VERTEX_WGSL;
+    wgsl += "@vertex fn vs(@builtin(vertex_index) i : u32) -> @builtin(position) vec4<f32> {\n";
+    wgsl += "  return vec4<f32>(wg_fullscreen_position(i), 0.0, 1.0);\n";
+    wgsl += "}\n";
+    wgsl += "@group(0) @binding(1) var<storage, read> buf : array<u32>;\n";
+    wgsl += "struct Meta { size : vec4<u32> };\n";
+    wgsl += "@group(0) @binding(2) var<uniform> meta : Meta;\n";
+    wgsl += "@fragment fn fs(@builtin(position) pos : vec4<f32>) -> @location(0) vec4<" + scalar +
+            "> {\n";
+    wgsl += "  let co = vec3<u32>(u32(pos.x), u32(pos.y), meta.size.w);\n";
+    wgsl += "  let i : u32 = (co.x + co.y * meta.size.x + co.z * meta.size.x * meta.size.y) * " +
+            words + "u;\n";
+    wgsl += "  var w : array<u32, " + words + ">;\n";
+    for (int k = 0; k < layout.words; k++) {
+      wgsl += "  w[" + std::to_string(k) + "] = buf[i + " + std::to_string(k) + "u];\n";
+    }
+    wgsl += "  var v : vec4<" + scalar + "> = vec4<" + scalar + ">(" + zero + ", " + zero + ", " +
+            zero + ", " + one + ");\n";
+    wgsl += "  " + unpack + "\n";
+    wgsl += "  return v;\n";
+    wgsl += "}\n";
+    WGPUShaderModule module = shader_module_create(wgsl);
+    WGPUColorTargetState target = {};
+    target.format = entry->format;
+    target.writeMask = WGPUColorWriteMask_All;
+    WGPUFragmentState fragment = {};
+    fragment.module = module;
+    fragment.entryPoint = wg_string("fs");
+    fragment.targetCount = 1;
+    fragment.targets = &target;
+    WGPURenderPipelineDescriptor desc = {};
+    desc.label = wg_string("emulated image to texture");
+    desc.vertex.module = module;
+    desc.vertex.entryPoint = wg_string("vs");
+    desc.primitive.topology = WGPUPrimitiveTopology_TriangleList;
+    desc.multisample.count = 1;
+    desc.multisample.mask = 0xFFFFFFFF;
+    desc.fragment = &fragment;
+    pipeline = wgpuDeviceCreateRenderPipeline(device_, &desc);
+    wgpuShaderModuleRelease(module);
+    sync_to_texture_pipelines_.add(key, pipeline);
+  }
+  WGPUBindGroupLayout layout_handle = wgpuRenderPipelineGetBindGroupLayout(pipeline, 0);
+  for (uint32_t layer = 0; layer < size[2]; layer++) {
+    WGPUBindGroupEntry entries[2] = {};
+    entries[0].binding = 1;
+    entries[0].buffer = buffer;
+    entries[0].size = WGPU_WHOLE_SIZE;
+    entries[1].binding = 2;
+    entries[1].buffer = meta;
+    entries[1].offset = uint64_t(layer) * stride;
+    entries[1].size = 16;
+    WGPUBindGroupDescriptor group_desc = {};
+    group_desc.layout = layout_handle;
+    group_desc.entryCount = 2;
+    group_desc.entries = entries;
+    WGPUBindGroup group = wgpuDeviceCreateBindGroup(device_, &group_desc);
+    state.bind_groups.append(group);
+
+    WGPURenderPassColorAttachment color = {};
+    color.view = texture_view_get(cmd.texture,
+                                  is_3d ? WGPUTextureViewDimension_3D :
+                                          WGPUTextureViewDimension_2D,
+                                  entry->format,
+                                  WGPUTextureAspect_All,
+                                  cmd.mip,
+                                  1,
+                                  is_3d ? 0 : layer,
+                                  1,
+                                  state);
+    color.depthSlice = is_3d ? layer : WGPU_DEPTH_SLICE_UNDEFINED;
+    color.loadOp = WGPULoadOp_Clear;
+    color.storeOp = WGPUStoreOp_Store;
+    WGPURenderPassDescriptor pass_desc = {};
+    pass_desc.colorAttachmentCount = 1;
+    pass_desc.colorAttachments = &color;
+    WGPURenderPassEncoder pass = wgpuCommandEncoderBeginRenderPass(state.encoder, &pass_desc);
+    wgpuRenderPassEncoderSetPipeline(pass, pipeline);
+    wgpuRenderPassEncoderSetBindGroup(pass, 0, group, 0, nullptr);
+    wgpuRenderPassEncoderDraw(pass, 3, 1, 0, 0);
+    wgpuRenderPassEncoderEnd(pass);
+    wgpuRenderPassEncoderRelease(pass);
+  }
+  wgpuBindGroupLayoutRelease(layout_handle);
+}
+
+/** \} */
+
 WGPUShaderModule WGDevice::shader_module_create(const std::string &wgsl)
 {
   WGPUShaderSourceWGSL source = {};
@@ -1218,10 +1630,6 @@ WGPUShaderModule WGDevice::shader_module_create(const std::string &wgsl)
   return wgpuDeviceCreateShaderModule(device_, &desc);
 }
 
-static const char *WG_FULLSCREEN_VERTEX_WGSL =
-    "fn wg_fullscreen_position(i : u32) -> vec2<f32> {\n"
-    "  return vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u)) * 2.0 - 1.0;\n"
-    "}\n";
 
 static const char *wg_wgsl_component_type(const WGPUTextureFormat format)
 {

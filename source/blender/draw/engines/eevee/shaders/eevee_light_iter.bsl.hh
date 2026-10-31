@@ -133,44 +133,38 @@ struct VisibleLightIterator {
   {
     const LightCullingData &culling = lrd.light_cull_buf;
 
-    switch (phase) {
-      case LIGHT_ITER_PHASE_INIT: {
-        index = int(culling.local_lights_len) - 1;
-        phase = LIGHT_ITER_PHASE_DIRECTIONAL;
-        [[fallthrough]];
+    /* The phases run one after the other. Written as a chain of `if` instead of a `switch`
+     * with fall-through, which WGSL does not have. */
+    if (phase == LIGHT_ITER_PHASE_INIT) {
+      index = int(culling.local_lights_len) - 1;
+      phase = LIGHT_ITER_PHASE_DIRECTIONAL;
+    }
+    if (phase == LIGHT_ITER_PHASE_DIRECTIONAL) {
+      index++;
+      if (index < int(culling.items_count)) {
+        return true;
       }
-      case LIGHT_ITER_PHASE_DIRECTIONAL: {
-        index++;
-        if (index < int(culling.items_count)) {
+      phase = LIGHT_ITER_PHASE_LOCAL;
+      /* Same as divide by 32 but avoid integer division. */
+      uint word_min = local_min_index >> 5u;
+      local_word_idx = word_min;
+      next_local_word(lrd);
+    }
+    if (phase == LIGHT_ITER_PHASE_LOCAL) {
+      /* Same as divide by 32 but avoid integer division. */
+      uint word_max = local_max_index >> 5u;
+      while (local_word_idx <= word_max) {
+        int bit_index = findLSB(local_word);
+        if (bit_index != -1) {
+          local_word &= ~1u << uint(bit_index);
+          index = int(local_word_idx * 32u + uint(bit_index));
           return true;
         }
-        phase = LIGHT_ITER_PHASE_LOCAL;
-        /* Same as divide by 32 but avoid integer division. */
-        uint word_min = local_min_index >> 5u;
-        local_word_idx = word_min;
+        local_word_idx++;
         next_local_word(lrd);
-        [[fallthrough]];
       }
-      case LIGHT_ITER_PHASE_LOCAL: {
-        /* Same as divide by 32 but avoid integer division. */
-        uint word_max = local_max_index >> 5u;
-        while (local_word_idx <= word_max) {
-          int bit_index = findLSB(local_word);
-          if (bit_index != -1) {
-            local_word &= ~1u << uint(bit_index);
-            index = int(local_word_idx * 32u + uint(bit_index));
-            return true;
-          }
-          local_word_idx++;
-          next_local_word(lrd);
-        }
-        phase = LIGHT_ITER_PHASE_END;
-        [[fallthrough]];
-      }
-      case LIGHT_ITER_PHASE_END:
-        return false;
+      phase = LIGHT_ITER_PHASE_END;
     }
-    assert(0);
     return false;
   }
 

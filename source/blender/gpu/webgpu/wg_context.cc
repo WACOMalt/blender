@@ -439,6 +439,9 @@ static void wg_resources_get(WGContext &context, WGShader &shader, WGPendingReso
           texture->buffer_texture_update();
         }
         wg_texture_binding(texture, resource.layout, false, binding);
+        if (texture && texture->is_usable()) {
+          texture->texture_use(IndexRange(binding.base_mip, binding.mip_count), false);
+        }
         r_pending.resources.append(binding);
 
         WGBindingResource sampler = {};
@@ -453,7 +456,64 @@ static void wg_resources_get(WGContext &context, WGShader &shader, WGPendingReso
         WGTexture *texture = (resource.slot >= 0 && resource.slot < WG_MAX_IMAGE_UNITS) ?
                                  state_manager.images[resource.slot] :
                                  nullptr;
-        wg_texture_binding(texture, resource.layout, true, binding);
+        const bool as_texture = resource.image_as_texture;
+        wg_texture_binding(texture, resource.layout, !as_texture, binding);
+        if (texture && texture->is_usable()) {
+          const bool writes = !as_texture && resource.layout.storage_access !=
+                                                 WGPUStorageTextureAccess_ReadOnly;
+          texture->texture_use(IndexRange(binding.base_mip, binding.mip_count), writes);
+        }
+        r_pending.resources.append(binding);
+        if (as_texture) {
+          WGBindingResource sampler = {};
+          sampler.group = WG_SAMPLER_GROUP;
+          sampler.binding = resource.binding;
+          sampler.kind = resource.sampler_kind;
+          sampler.object = backend.sampler_get(GPUSamplerState::default_sampler(),
+                                               resource.sampler_kind);
+          r_pending.resources.append(sampler);
+        }
+        break;
+      }
+      case WGResourceBinding::Type::BufferImage: {
+        /* The buffer of an emulated image, see `wg_shader.hh`. */
+        WGTexture *texture = nullptr;
+        if (resource.sampler_slot) {
+          if (resource.slot >= 0 && resource.slot < WG_MAX_TEXTURE_UNITS) {
+            texture = state_manager.textures[resource.slot].texture;
+          }
+        }
+        else if (resource.slot >= 0 && resource.slot < WG_MAX_IMAGE_UNITS) {
+          texture = state_manager.images[resource.slot];
+        }
+        uint32_t meta[4] = {0, 0, 0, 0};
+        const bool usable = texture && texture->is_usable() &&
+                            texture->device_format_get() == resource.image_format &&
+                            texture->type_get() != GPU_TEXTURE_BUFFER;
+        if (usable) {
+          const int mip = texture->sampling_mips().start();
+          const bool writable = resource.layout.kind == WGBindingLayout::Kind::StorageBuffer;
+          texture->buffer_image_use(mip, writable);
+          binding.object = texture->id_get();
+          binding.base_mip = uint32_t(mip);
+          binding.buffer_image = true;
+          binding.offset = 0;
+          binding.size = 0;
+          const int3 size = texture->mip_size_get(mip - texture->view_mip_start());
+          meta[0] = uint32_t(max_ii(size.x, 1));
+          meta[1] = uint32_t(max_ii(size.y, 1));
+          meta[2] = uint32_t(max_ii(size.z, 1));
+          WGTexelLayout layout;
+          if (wg_texel_layout_get(texture->device_format_get(), layout)) {
+            meta[3] = uint32_t(layout.words);
+          }
+        }
+        else {
+          binding.object = backend.dummy_buffer_get();
+          binding.offset = 0;
+          binding.size = WG_DUMMY_BUFFER_SIZE;
+        }
+        shader.push_constants_set_raw(resource.meta_offset, meta, sizeof(meta));
         r_pending.resources.append(binding);
         break;
       }

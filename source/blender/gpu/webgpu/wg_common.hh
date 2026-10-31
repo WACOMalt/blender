@@ -56,6 +56,45 @@ TextureFormat wg_device_format(TextureFormat format);
 WGPUTextureFormat wg_texture_format(TextureFormat device_format);
 bool wg_texture_format_is_renderable(TextureFormat device_format);
 bool wg_texture_format_is_storage(TextureFormat device_format);
+
+/**
+ * Layout of the texels of a format in the buffer of an emulated image (see `wg_shader.hh`):
+ * the bits of the texture's format, padded to 32 bit words.
+ */
+struct WGTexelLayout {
+  enum class Kind : uint8_t {
+    Float32,
+    Float16,
+    Unorm16,
+    Snorm16,
+    Uint16,
+    Sint16,
+    Unorm8,
+    Snorm8,
+    Uint8,
+    Sint8,
+    Uint32,
+    Sint32,
+    UFloat11_11_10,
+    Unorm10_10_10_2,
+    Uint10_10_10_2,
+  };
+  Kind kind;
+  int components;
+  /** 32 bit words per texel. */
+  int words;
+
+  bool is_uint() const
+  {
+    return ELEM(kind, Kind::Uint16, Kind::Uint8, Kind::Uint32, Kind::Uint10_10_10_2);
+  }
+  bool is_sint() const
+  {
+    return ELEM(kind, Kind::Sint16, Kind::Sint8, Kind::Sint32);
+  }
+};
+/** False when the format can't be emulated. */
+bool wg_texel_layout_get(TextureFormat device_format, WGTexelLayout &r_layout);
 WGPUTextureSampleType wg_texture_sample_type(TextureFormat device_format);
 bool wg_texture_format_is_integer(WGPUTextureFormat format);
 bool wg_texture_format_has_stencil(WGPUTextureFormat format);

@@ -112,6 +112,7 @@ bool WGTexture::init_internal()
                   (type_ == GPU_TEXTURE_1D) ? WGPUTextureDimension_1D :
                                               WGPUTextureDimension_2D;
   cmd.format = wg_format_;
+  cmd.blender_format = device_format_;
   cmd.usage = usage;
   uint32_t extent[3];
   wg_mip_extent(0, extent);
@@ -131,6 +132,7 @@ bool WGTexture::init_internal()
     cmd.view_format = WGPUTextureFormat_RGBA8UnormSrgb;
   }
   mipmaps_ = cmd.mip_count;
+  shared_ = std::make_shared<WGTextureShared>();
 
   WGRecord record;
   record.stream.push(WGCommandType::CreateTexture, cmd);
@@ -211,6 +213,7 @@ bool WGTexture::init_internal(gpu::Texture *src, bool /*use_stencil*/)
   WGTexture *source = static_cast<WGTexture *>(src);
   id_ = source->id_;
   is_unsupported_ = source->is_unsupported_;
+  shared_ = source->shared_;
   device_format_ = wg_device_format(format_);
   wg_format_ = wg_texture_format(device_format_);
   /* Views are relative to the source texture, which may itself be a view. */
@@ -232,6 +235,7 @@ void WGTexture::update_sub(int mip,
   if (!is_usable() || data == nullptr) {
     return;
   }
+  texture_use(IndexRange(view_mip_start_ + mip, 1), true);
   if (format_flag_ & GPU_FORMAT_DEPTH) {
     /* WebGPU can't copy to depth textures, only clear them. Uploads of a single value (default
      * depth textures) are clears. */
@@ -361,6 +365,7 @@ void WGTexture::read_region(const int mip,
   if (!is_usable()) {
     return;
   }
+  texture_use(IndexRange(view_mip_start_ + mip, 1), false);
   const size_t texel_size = to_bytesize(device_format_);
   const size_t pixels = size_t(extent[0]) * extent[1] * extent[2];
   Vector<uint8_t> device_data(pixels * texel_size);
@@ -394,6 +399,9 @@ void WGTexture::copy_to(Texture *dst, IndexRange mip_levels)
   if (!is_usable() || !dst_texture->is_usable()) {
     return;
   }
+  texture_use(IndexRange(view_mip_start_ + mip_levels.start(), mip_levels.size()), false);
+  dst_texture->texture_use(
+      IndexRange(dst_texture->view_mip_start_ + mip_levels.start(), mip_levels.size()), true);
   WGRecord record;
   for (const int mip : mip_levels) {
     WGCmdCopyTextureToTexture cmd = {};
@@ -416,6 +424,7 @@ void WGTexture::clear(double4 data)
   if (!is_usable()) {
     return;
   }
+  texture_use(true);
   /* Render-able textures are cleared by render passes, depth can't be uploaded.
    * The browser rejects non-finite clear values, those are uploaded. */
   const bool is_finite = std::isfinite(data[0]) && std::isfinite(data[1]) &&
@@ -484,6 +493,45 @@ void WGTexture::clear(double4 data)
     int offset[3] = {0, 0, 0};
     int extent[3] = {size.x, size.y, size.z};
     update_sub(mip, offset, extent, data_format, texels.data(), 0);
+  }
+}
+
+void WGTexture::buffer_image_use(const int mip, const bool writable)
+{
+  if (!shared_ || mip < 0 || mip >= 32) {
+    return;
+  }
+  const uint32_t bit = 1u << mip;
+  if (!(shared_->buffer_valid & bit)) {
+    WGRecord record;
+    record.stream.push(WGCommandType::SyncBufferImage,
+                       WGCmdSyncBufferImage{id_, uint32_t(mip), true});
+    shared_->buffer_valid |= bit;
+  }
+  if (writable) {
+    shared_->texture_invalid |= bit;
+  }
+}
+
+void WGTexture::texture_use(const IndexRange mips, const bool writes)
+{
+  if (!shared_ || (shared_->texture_invalid == 0 && (!writes || shared_->buffer_valid == 0))) {
+    return;
+  }
+  for (const int mip : mips) {
+    if (mip < 0 || mip >= 32) {
+      continue;
+    }
+    const uint32_t bit = 1u << mip;
+    if (shared_->texture_invalid & bit) {
+      WGRecord record;
+      record.stream.push(WGCommandType::SyncBufferImage,
+                         WGCmdSyncBufferImage{id_, uint32_t(mip), false});
+      shared_->texture_invalid &= ~bit;
+    }
+    if (writes) {
+      shared_->buffer_valid &= ~bit;
+    }
   }
 }
 

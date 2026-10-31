@@ -290,6 +290,10 @@ bool ShaderModule::request_specializations(bool block_until_ready,
         Vector<AsyncSpecializationHandle> handles;
         for (int i : IndexRange(3)) {
           gpu::Shader *shader = static_shader_get(eShaderType(DEFERRED_LIGHT_SINGLE + i));
+          if (shader == nullptr) {
+            /* Compilation failed (already reported), nothing to specialize. */
+            continue;
+          }
 
           ShaderSpecialization specialization;
           specialization.shader = shader;

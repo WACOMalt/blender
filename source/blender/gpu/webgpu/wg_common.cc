@@ -225,6 +225,98 @@ bool wg_texture_format_is_storage(const TextureFormat device_format)
   }
 }
 
+bool wg_texel_layout_get(const TextureFormat device_format, WGTexelLayout &r_layout)
+{
+  using TF = TextureFormat;
+  using Kind = WGTexelLayout::Kind;
+  auto set = [&](const Kind kind, const int components, const int words) {
+    r_layout = {kind, components, words};
+    return true;
+  };
+  switch (device_format) {
+    case TF::SFLOAT_32:
+      return set(Kind::Float32, 1, 1);
+    case TF::SFLOAT_32_32:
+      return set(Kind::Float32, 2, 2);
+    case TF::SFLOAT_32_32_32_32:
+      return set(Kind::Float32, 4, 4);
+    case TF::SFLOAT_16:
+      return set(Kind::Float16, 1, 1);
+    case TF::SFLOAT_16_16:
+      return set(Kind::Float16, 2, 1);
+    case TF::SFLOAT_16_16_16_16:
+      return set(Kind::Float16, 4, 2);
+    case TF::UNORM_16:
+      return set(Kind::Unorm16, 1, 1);
+    case TF::UNORM_16_16:
+      return set(Kind::Unorm16, 2, 1);
+    case TF::UNORM_16_16_16_16:
+      return set(Kind::Unorm16, 4, 2);
+    case TF::SNORM_16:
+      return set(Kind::Snorm16, 1, 1);
+    case TF::SNORM_16_16:
+      return set(Kind::Snorm16, 2, 1);
+    case TF::SNORM_16_16_16_16:
+      return set(Kind::Snorm16, 4, 2);
+    case TF::UINT_16:
+      return set(Kind::Uint16, 1, 1);
+    case TF::UINT_16_16:
+      return set(Kind::Uint16, 2, 1);
+    case TF::UINT_16_16_16_16:
+      return set(Kind::Uint16, 4, 2);
+    case TF::SINT_16:
+      return set(Kind::Sint16, 1, 1);
+    case TF::SINT_16_16:
+      return set(Kind::Sint16, 2, 1);
+    case TF::SINT_16_16_16_16:
+      return set(Kind::Sint16, 4, 2);
+    case TF::UNORM_8:
+      return set(Kind::Unorm8, 1, 1);
+    case TF::UNORM_8_8:
+      return set(Kind::Unorm8, 2, 1);
+    case TF::UNORM_8_8_8_8:
+      return set(Kind::Unorm8, 4, 1);
+    case TF::SNORM_8:
+      return set(Kind::Snorm8, 1, 1);
+    case TF::SNORM_8_8:
+      return set(Kind::Snorm8, 2, 1);
+    case TF::SNORM_8_8_8_8:
+      return set(Kind::Snorm8, 4, 1);
+    case TF::UINT_8:
+      return set(Kind::Uint8, 1, 1);
+    case TF::UINT_8_8:
+      return set(Kind::Uint8, 2, 1);
+    case TF::UINT_8_8_8_8:
+      return set(Kind::Uint8, 4, 1);
+    case TF::SINT_8:
+      return set(Kind::Sint8, 1, 1);
+    case TF::SINT_8_8:
+      return set(Kind::Sint8, 2, 1);
+    case TF::SINT_8_8_8_8:
+      return set(Kind::Sint8, 4, 1);
+    case TF::UINT_32:
+      return set(Kind::Uint32, 1, 1);
+    case TF::UINT_32_32:
+      return set(Kind::Uint32, 2, 2);
+    case TF::UINT_32_32_32_32:
+      return set(Kind::Uint32, 4, 4);
+    case TF::SINT_32:
+      return set(Kind::Sint32, 1, 1);
+    case TF::SINT_32_32:
+      return set(Kind::Sint32, 2, 2);
+    case TF::SINT_32_32_32_32:
+      return set(Kind::Sint32, 4, 4);
+    case TF::UFLOAT_11_11_10:
+      return set(Kind::UFloat11_11_10, 3, 1);
+    case TF::UNORM_10_10_10_2:
+      return set(Kind::Unorm10_10_10_2, 4, 1);
+    case TF::UINT_10_10_10_2:
+      return set(Kind::Uint10_10_10_2, 4, 1);
+    default:
+      return false;
+  }
+}
+
 WGPUTextureSampleType wg_texture_sample_type(const TextureFormat device_format)
 {
   using TF = TextureFormat;

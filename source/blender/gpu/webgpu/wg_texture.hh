@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include <memory>
+
 #include "BLI_math_base.hh"
 
 #include "gpu_texture_private.hh"
@@ -19,6 +21,17 @@ namespace blender::gpu {
 constexpr uint32_t WG_BUFFER_TEXTURE_WIDTH = 4096;
 
 class WGVertBuf;
+
+/**
+ * State of the emulated images of a texture (see `wg_shader.hh`), shared by the texture and its
+ * views. Bits are mip levels of the WebGPU texture.
+ */
+struct WGTextureShared {
+  /** Mip levels whose buffer holds the current content. */
+  uint32_t buffer_valid = 0;
+  /** Mip levels whose texture is outdated (the buffer was written). */
+  uint32_t texture_invalid = 0;
+};
 
 class WGTexture : public Texture {
   /** The WebGPU texture, of the source texture for views. */
@@ -36,6 +49,7 @@ class WGTexture : public Texture {
    */
   WGVertBuf *source_vbo_ = nullptr;
   uint32_t buffer_width_ = 0, buffer_height_ = 0;
+  std::shared_ptr<WGTextureShared> shared_;
 
  public:
   WGTexture(const char *name) : Texture(name) {}
@@ -59,6 +73,23 @@ class WGTexture : public Texture {
 
   /** Copy the vertex buffer of a buffer texture, before it is used by a draw. */
   void buffer_texture_update();
+
+  /**
+   * Before a mip level (of the WebGPU texture) is bound as the buffer of an emulated image:
+   * copies the texture to the buffer when the buffer is outdated.
+   */
+  void buffer_image_use(int mip, bool writable);
+  /**
+   * Before mip levels (of the WebGPU texture) are used as a texture (sampled, storage image,
+   * attachment, copy, upload, read): copies the buffers of emulated images back when they are
+   * newer. `writes` invalidates the buffers.
+   */
+  void texture_use(IndexRange mips, bool writes);
+  /** All mip levels of the texture. */
+  void texture_use(bool writes)
+  {
+    texture_use(IndexRange(view_mip_start_, max_ii(mipmaps_, 1)), writes);
+  }
 
   /** Read a region of a mip level, `offset[2]` is the layer (or depth for 3D textures). */
   void read_region(int mip,

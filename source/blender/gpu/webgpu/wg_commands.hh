@@ -25,6 +25,8 @@
 
 #include "BLI_vector.hh"
 
+#include "GPU_texture.hh"
+
 #include <webgpu/webgpu.h>
 
 namespace blender::gpu {
@@ -66,6 +68,7 @@ enum class WGCommandType : uint32_t {
   Dispatch,
   ClearAttachments,
   Present,
+  SyncBufferImage,
 };
 
 /* -------------------------------------------------------------------- */
@@ -83,6 +86,8 @@ struct WGCmdCreateTexture {
   WGObjectID texture;
   WGPUTextureDimension dimension;
   WGPUTextureFormat format;
+  /** Blender's format of `format`, for the buffers of emulated images. */
+  TextureFormat blender_format;
   WGPUTextureUsage usage;
   uint32_t width, height, depth_or_layers;
   uint32_t mip_count;
@@ -102,8 +107,13 @@ struct WGCmdCreateSampler {
 };
 
 /** Trailing data: WGSL source (null terminated). */
+constexpr int WG_LABEL_SIZE = 64;
+
+/** Trailing data: the WGSL source (null terminated). */
 struct WGCmdCreateShaderModule {
   WGObjectID module;
+  /** Label for error messages (the shader name). */
+  char label[WG_LABEL_SIZE];
 };
 
 /** One entry of a bind group layout. */
@@ -131,11 +141,15 @@ struct WGBindingLayout {
 struct WGCmdCreateBindGroupLayout {
   WGObjectID layout;
   uint32_t entries_len;
+  /** Label for error messages (the shader name). */
+  char label[WG_LABEL_SIZE];
 };
 
 struct WGCmdCreatePipelineLayout {
   WGObjectID layout;
   WGObjectID bind_group_layouts[2];
+  /** Label for error messages (the shader name). */
+  char label[WG_LABEL_SIZE];
 };
 
 struct WGVertexAttribute {
@@ -174,6 +188,8 @@ constexpr int WG_MAX_VERTEX_BUFFERS = 16;
  */
 struct WGCmdCreateRenderPipeline {
   WGObjectID pipeline;
+  /** Label for error messages (the shader name). */
+  char label[WG_LABEL_SIZE];
   WGObjectID layout;
   WGObjectID vertex_module;
   WGObjectID fragment_module;
@@ -202,6 +218,8 @@ struct WGCmdCreateRenderPipeline {
 /** Trailing data: `constants_len` #WGPipelineConstant. */
 struct WGCmdCreateComputePipeline {
   WGObjectID pipeline;
+  /** Label for error messages (the shader name). */
+  char label[WG_LABEL_SIZE];
   WGObjectID layout;
   WGObjectID module;
   uint32_t constants_len;
@@ -319,6 +337,8 @@ struct WGBindingResource {
   WGPUTextureAspect aspect;
   uint32_t base_mip, mip_count;
   uint32_t base_layer, layer_count;
+  /** Buffer kinds: `object` is a texture, bind the buffer of its emulated image at `base_mip`. */
+  bool buffer_image;
 };
 
 struct WGVertexBufferBinding {
@@ -387,6 +407,16 @@ constexpr uint32_t WG_CLEAR_DATA_SIZE = 8 * 16 + 16;
 /** Copy a texture to the canvas, flipping it vertically (see `wg_shader.hh`). */
 struct WGCmdPresent {
   WGObjectID texture;
+};
+
+/**
+ * Copy a mip level of a texture to the buffer of its emulated image, or the other way around
+ * (see `wg_shader.hh`). The buffer is created when needed.
+ */
+struct WGCmdSyncBufferImage {
+  WGObjectID texture;
+  uint32_t mip;
+  bool to_buffer;
 };
 
 /** \} */

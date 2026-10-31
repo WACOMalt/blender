@@ -97,11 +97,22 @@ Decisions by the repo owner (2026-10-28):
 - Clears before the first draw of a pass are load operations, other clears are draws.
 - Points larger than one pixel (WebGPU has none) are drawn by a variant of the shader that
   expands each point to two triangles, reading the vertex attributes from storage buffers.
-- EEVEE's shaders can not be translated by Tint yet (read-write storage textures, dual source
-  blending, image atomics, non-uniform barriers), so Material Preview and Rendered shading use
-  Workbench and F12 renders with EEVEE report an error on WebGPU. Cycles works.
+- Blender's runtime shader preprocessor runs on the GLSL like on the other backends (static
+  branches on constants, dead code elimination).
+- Writable buffers and images get a read-only alias binding for the vertex stage (WebGPU
+  forbids writable storage there).
+- Images: WebGPU has no image atomics, allows read-write storage textures only for 32 bit single
+  channel formats and has few storage formats. Read-only images are bound as textures; the
+  others are emulated with a storage buffer holding the texels in the texture's bit layout,
+  synchronized with the texture by compute/render passes when the texture is used (the same idea
+  as Metal's buffer-backed atomic textures). See `wg_shader.hh`.
+- EEVEE (in progress, `BLENDER_WEBGPU_EEVEE=1` enables it): Material Preview and Rendered
+  shading use Workbench and F12 renders with EEVEE report an error on WebGPU until its shaders
+  all work. Shader changes needed for WGSL: no `switch` fall-through, barriers in uniform
+  control flow (the EEVEE shadow shaders were restructured). Without the dual source blending
+  feature the second output is dropped (approximate blending). Cycles works.
 - Not supported yet: geometry shaders, layered rendering, barycentric coordinates,
-  1D array textures, image atomics, wide points in indirect draws, triangle fans in batches.
+  1D array textures, wide points in indirect draws, triangle fans in batches.
 - Testing caveat: headless Chromium renders with SwiftShader, which drops lines that cross the
   camera plane (one end behind the camera; `web/tests/lineclip.html` reproduces it without
   Blender). The near part of the viewport grid is missing in those screenshots, not on a GPU.

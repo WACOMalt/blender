@@ -13,6 +13,15 @@
  * - There are no geometry shaders, layered rendering or barycentric coordinates.
  * - WebGPU's framebuffer Y axis points down, the vertex shader flips Y so the memory layout of
  *   textures matches the other back-ends. Front faces are clockwise as a result.
+ * - Writable storage isn't allowed in vertex shaders: writable buffers and images get a second,
+ *   read-only binding used by the vertex stage (#WGResourceBinding::vertex_alias).
+ * - Emulated images (#WGImageMode): WebGPU has no image atomics, can only read and write 32 bit
+ *   single channel storage textures and has few storage formats. Images that are only read are
+ *   bound as textures. The others are emulated with a storage buffer holding the texels in the
+ *   bit layout of the texture format (#WGTexelLayout) and the size of the image in the push
+ *   constants; the image functions become generated helpers. The device copies the texture to
+ *   the buffer before the first use of the buffer, and the buffer back to the texture before the
+ *   texture is used again (#WGTexture::texture_use, #WGCmdSyncBufferImage).
  */
 
 #pragma once
@@ -200,6 +209,13 @@ class WGShader : public Shader {
   Span<uint8_t> push_constants_data() const
   {
     return push_constants_data_;
+  }
+  /** Write raw data in the push constants (the sizes of emulated images). */
+  void push_constants_set_raw(const uint32_t offset, const void *data, const size_t size)
+  {
+    if (offset + size <= size_t(push_constants_data_.size())) {
+      memcpy(push_constants_data_.data() + offset, data, size);
+    }
   }
 
   /**

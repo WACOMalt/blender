@@ -144,6 +144,7 @@ uint32_t WGFrameBuffer::render_pass_ensure()
     color.texture = texture->id_get();
     color.view_format = attachment_view_format(texture);
     color.mip = uint32_t(texture->view_mip_start() + attachment.mip);
+    texture->texture_use(IndexRange(color.mip, 1), true);
     color.layer = uint32_t(texture->view_layer_start() + max_ii(attachment.layer, 0));
     color.load_op = color_load_ops_[slot];
     color.store_op = color_store_ops_[slot];
@@ -164,6 +165,7 @@ uint32_t WGFrameBuffer::render_pass_ensure()
     cmd.depth.texture = depth->id_get();
     cmd.depth.view_format = depth->wg_format_get();
     cmd.depth.mip = uint32_t(depth->view_mip_start() + depth_attachment.mip);
+    depth->texture_use(IndexRange(cmd.depth.mip, 1), true);
     cmd.depth.layer = uint32_t(depth->view_layer_start() + max_ii(depth_attachment.layer, 0));
     cmd.depth.load_op = depth_load_op_;
     cmd.depth.store_op = depth_store_op_;

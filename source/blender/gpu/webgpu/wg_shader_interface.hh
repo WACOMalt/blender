@@ -34,6 +34,11 @@ struct WGResourceBinding {
     SubpassInput,
     /** The uniform buffer holding the push constants. */
     PushConstants,
+    /**
+     * Image emulated with a storage buffer (atomic images, read-write images of formats
+     * WebGPU can't read and write, formats that aren't storage formats), see `wg_shader.hh`.
+     */
+    BufferImage,
   };
   Type type;
   /** Slot of the resource in Blender's bind spaces (texture unit, buffer slot...). */
@@ -43,6 +48,30 @@ struct WGResourceBinding {
   WGBindingLayout layout;
   /** Kind of the sampler entry (#WG_SAMPLER_GROUP) of textures. */
   WGBindingLayout::Kind sampler_kind;
+  /**
+   * Writable storage isn't allowed in vertex shaders, writable buffers and images have a second,
+   * read-only binding for the vertex stage (bound to the same resource).
+   */
+  bool vertex_alias;
+  /** Images that are only read are bound as textures (#Type::Image). */
+  bool image_as_texture;
+  /* #Type::BufferImage. */
+  /** The image is a sampler of an atomic type, `slot` is a texture unit. */
+  bool sampler_slot;
+  /** Expected format of the texture. */
+  TextureFormat image_format;
+  /** Offset of the `uvec4` with the size of the image in the push constants. */
+  uint32_t meta_offset;
+};
+
+/** How an image resource is bound, see #WGResourceBinding::Type::BufferImage. */
+enum class WGImageMode {
+  /** A storage texture. */
+  Native,
+  /** A texture, for images that are only read. */
+  Sampled,
+  /** A storage buffer. */
+  Buffer,
 };
 
 /**
@@ -66,6 +95,7 @@ class WGShaderInterface : public ShaderInterface {
   Vector<WGResourceBinding> resources_;
   WGPushConstantsLayout push_constants_layout_;
   shader::BuiltinBits shader_builtins_;
+  bool has_buffer_images_ = false;
 
  public:
   void init(const shader::ShaderCreateInfo &info);
@@ -75,7 +105,15 @@ class WGShaderInterface : public ShaderInterface {
     return resources_;
   }
   /** Binding of a resource in the WGSL shader. */
+  static WGImageMode image_mode(const shader::ShaderCreateInfo::Resource &resource);
+  bool has_buffer_images() const
+  {
+    return has_buffer_images_;
+  }
+
   uint32_t binding_get(const shader::ShaderCreateInfo::Resource &resource) const;
+  /** Binding of the read-only alias for the vertex stage, -1 when the resource has none. */
+  int vertex_alias_binding_get(const shader::ShaderCreateInfo::Resource &resource) const;
   uint32_t subpass_input_binding_get(int index) const;
   /** Binding of the push constants buffer, only valid when there are push constants. */
   uint32_t push_constants_binding_get() const;

@@ -291,6 +291,60 @@ void WGShaderInterface::populate_builtins()
   }
 }
 
+static bool wg_is_atomic_image_type(const ImageType type)
+{
+  return ELEM(type,
+              ImageType::AtomicUint2D,
+              ImageType::AtomicUint2DArray,
+              ImageType::AtomicUint3D,
+              ImageType::AtomicInt2D,
+              ImageType::AtomicInt2DArray,
+              ImageType::AtomicInt3D);
+}
+
+WGImageMode WGShaderInterface::image_mode(const Resource &res)
+{
+  if (res.bind_type == Resource::BindType::SAMPLER) {
+    return wg_is_atomic_image_type(res.sampler.type) ? WGImageMode::Buffer : WGImageMode::Native;
+  }
+  if (res.bind_type != Resource::BindType::IMAGE) {
+    return WGImageMode::Native;
+  }
+  if (wg_is_atomic_image_type(res.image.type)) {
+    return WGImageMode::Buffer;
+  }
+  const TextureFormat device_format = wg_device_format(TextureFormat(res.image.format));
+  const bool read = flag_is_set(res.image.qualifiers, Qualifier::read);
+  const bool write = flag_is_set(res.image.qualifiers, Qualifier::write);
+  const bool can_fetch = !ELEM(res.image.type,
+                               ImageType::FloatCube,
+                               ImageType::FloatCubeArray,
+                               ImageType::IntCube,
+                               ImageType::IntCubeArray,
+                               ImageType::UintCube,
+                               ImageType::UintCubeArray,
+                               ImageType::FloatBuffer,
+                               ImageType::IntBuffer,
+                               ImageType::UintBuffer);
+  if (read && !write && can_fetch) {
+    /* Textures don't count against the storage texture limits and have no format restrictions. */
+    return WGImageMode::Sampled;
+  }
+  /* WebGPU can read and write storage textures of 32 bit single channel formats only. */
+  const bool read_write_ok = !(read && write) || ELEM(device_format,
+                                                       TextureFormat::SFLOAT_32,
+                                                       TextureFormat::UINT_32,
+                                                       TextureFormat::SINT_32);
+  if (wg_texture_format_is_storage(device_format) && read_write_ok) {
+    return WGImageMode::Native;
+  }
+  WGTexelLayout layout;
+  if (wg_texel_layout_get(device_format, layout)) {
+    return WGImageMode::Buffer;
+  }
+  return WGImageMode::Native;
+}
+
 void WGShaderInterface::populate_resources(const ShaderCreateInfo &info)
 {
   const bool is_compute = !info.compute_source_.is_empty() ||
@@ -317,15 +371,78 @@ void WGShaderInterface::populate_resources(const ShaderCreateInfo &info)
     resources_.append(resource);
   };
 
+  /* Images and atomic samplers emulated with a storage buffer. */
+  auto add_buffer_image = [&](const int slot,
+                              const bool sampler_slot,
+                              const ImageType image_type,
+                              const Qualifier qualifiers,
+                              const TextureFormat image_format) {
+    const bool is_writable = flag_is_set(qualifiers, Qualifier::write);
+    WGResourceBinding resource = {};
+    resource.type = WGResourceBinding::Type::BufferImage;
+    resource.slot = slot;
+    resource.sampler_slot = sampler_slot;
+    resource.image_format = image_format;
+    resource.binding = binding++;
+    resource.layout.binding = resource.binding;
+    resource.layout.kind = is_writable ? WGBindingLayout::Kind::StorageBuffer :
+                                         WGBindingLayout::Kind::ReadOnlyStorageBuffer;
+    resource.layout.visibility = is_writable ? writable_stages : all_stages;
+    resource.layout.view_dimension = wg_view_dimension(image_type);
+    resources_.append(resource);
+    has_buffer_images_ = true;
+    if (is_writable && !is_compute) {
+      /* Read-only alias for the vertex stage. */
+      resource.binding = binding++;
+      resource.layout.binding = resource.binding;
+      resource.layout.kind = WGBindingLayout::Kind::ReadOnlyStorageBuffer;
+      resource.layout.visibility = WGPUShaderStage_Vertex;
+      resource.vertex_alias = true;
+      resources_.append(resource);
+    }
+  };
+
   for (const ShaderCreateInfo::SubpassIn &subpass_in : info.subpass_inputs_) {
     add_texture(WGResourceBinding::Type::SubpassInput, subpass_in.index, subpass_in.img_type);
   }
   for (const Resource &res : all_resources_get(info)) {
     switch (res.bind_type) {
       case Resource::BindType::SAMPLER:
+        if (image_mode(res) == WGImageMode::Buffer) {
+          const bool is_signed = ELEM(res.sampler.type,
+                                      ImageType::AtomicInt2D,
+                                      ImageType::AtomicInt2DArray,
+                                      ImageType::AtomicInt3D);
+          add_buffer_image(res.slot,
+                           true,
+                           res.sampler.type,
+                           Qualifier::read,
+                           is_signed ? TextureFormat::SINT_32 : TextureFormat::UINT_32);
+          break;
+        }
         add_texture(WGResourceBinding::Type::Sampler, res.slot, res.sampler.type);
         break;
       case Resource::BindType::IMAGE: {
+        const WGImageMode mode = image_mode(res);
+        if (mode == WGImageMode::Buffer) {
+          const bool is_atomic = wg_is_atomic_image_type(res.image.type);
+          const bool is_signed = ELEM(res.image.type,
+                                      ImageType::AtomicInt2D,
+                                      ImageType::AtomicInt2DArray,
+                                      ImageType::AtomicInt3D);
+          add_buffer_image(res.slot,
+                           false,
+                           res.image.type,
+                           res.image.qualifiers,
+                           is_atomic ? (is_signed ? TextureFormat::SINT_32 : TextureFormat::UINT_32) :
+                                       wg_device_format(TextureFormat(res.image.format)));
+          break;
+        }
+        if (mode == WGImageMode::Sampled) {
+          add_texture(WGResourceBinding::Type::Image, res.slot, res.image.type);
+          resources_.last().image_as_texture = true;
+          break;
+        }
         WGResourceBinding resource = {};
         resource.type = WGResourceBinding::Type::Image;
         resource.slot = res.slot;
@@ -340,6 +457,15 @@ void WGShaderInterface::populate_resources(const ShaderCreateInfo &info)
         resource.layout.view_dimension = wg_view_dimension(res.image.type);
         resource.layout.storage_format = wg_texture_format(TextureFormat(res.image.format));
         resources_.append(resource);
+        if (!is_compute && resource.layout.storage_access != WGPUStorageTextureAccess_ReadOnly) {
+          /* Read-only alias for the vertex stage. */
+          resource.binding = binding++;
+          resource.layout.binding = resource.binding;
+          resource.layout.storage_access = WGPUStorageTextureAccess_ReadOnly;
+          resource.layout.visibility = WGPUShaderStage_Vertex;
+          resource.vertex_alias = true;
+          resources_.append(resource);
+        }
         break;
       }
       case Resource::BindType::UNIFORM_BUFFER: {
@@ -364,6 +490,15 @@ void WGShaderInterface::populate_resources(const ShaderCreateInfo &info)
                                              WGBindingLayout::Kind::ReadOnlyStorageBuffer;
         resource.layout.visibility = is_writable ? writable_stages : all_stages;
         resources_.append(resource);
+        if (is_writable && !is_compute) {
+          /* Read-only alias for the vertex stage. */
+          resource.binding = binding++;
+          resource.layout.binding = resource.binding;
+          resource.layout.kind = WGBindingLayout::Kind::ReadOnlyStorageBuffer;
+          resource.layout.visibility = WGPUShaderStage_Vertex;
+          resource.vertex_alias = true;
+          resources_.append(resource);
+        }
         break;
       }
       case Resource::BindType::ACCELERATION_STRUCTURE:
@@ -372,7 +507,7 @@ void WGShaderInterface::populate_resources(const ShaderCreateInfo &info)
         break;
     }
   }
-  if (!info.push_constants_.is_empty()) {
+  if (!info.push_constants_.is_empty() || has_buffer_images_) {
     WGResourceBinding resource = {};
     resource.type = WGResourceBinding::Type::PushConstants;
     resource.slot = -1;
@@ -398,6 +533,22 @@ void WGShaderInterface::populate_push_constants(const ShaderCreateInfo &info)
     layout.inner_row_padding = Std140::inner_row_padding(push_constant.type);
     push_constants_layout_.push_constants.append(layout);
     reserve<Std140>(push_constant.type, push_constant.array_size, &offset);
+  }
+  /* The sizes of the emulated images, a `uvec4` each (see `wg_shader.hh`). */
+  for (WGResourceBinding &resource : resources_) {
+    if (resource.type == WGResourceBinding::Type::BufferImage && !resource.vertex_alias) {
+      align<Std140>(Type::uint4_t, 0, &offset);
+      resource.meta_offset = offset;
+      reserve<Std140>(Type::uint4_t, 0, &offset);
+      /* The alias shares the push constant. */
+      for (WGResourceBinding &alias : resources_) {
+        if (alias.vertex_alias && alias.type == resource.type && alias.slot == resource.slot &&
+            alias.sampler_slot == resource.sampler_slot)
+        {
+          alias.meta_offset = offset - 16;
+        }
+      }
+    }
   }
   align_end_of_struct<Std140>(&offset);
   push_constants_layout_.size_in_bytes = offset;
@@ -434,9 +585,54 @@ uint32_t WGShaderInterface::binding_get(const Resource &resource) const
     case Resource::BindType::ACCELERATION_STRUCTURE:
       return 0;
   }
+  const bool sampler_slot = resource.bind_type == Resource::BindType::SAMPLER;
+  if (ELEM(resource.bind_type, Resource::BindType::IMAGE, Resource::BindType::SAMPLER) &&
+      image_mode(resource) == WGImageMode::Buffer)
+  {
+    for (const WGResourceBinding &binding : resources_) {
+      if (binding.type == WGResourceBinding::Type::BufferImage && !binding.vertex_alias &&
+          binding.slot == resource.slot && binding.sampler_slot == sampler_slot)
+      {
+        return binding.binding;
+      }
+    }
+    BLI_assert_unreachable();
+    return 0;
+  }
   const WGResourceBinding *binding = find_resource(resources_, type, resource.slot);
   BLI_assert(binding);
   return binding ? binding->binding : 0;
+}
+
+int WGShaderInterface::vertex_alias_binding_get(const Resource &resource) const
+{
+  WGResourceBinding::Type type = WGResourceBinding::Type::StorageBuffer;
+  bool sampler_slot = false;
+  switch (resource.bind_type) {
+    case Resource::BindType::STORAGE_BUFFER:
+      break;
+    case Resource::BindType::IMAGE:
+      type = image_mode(resource) == WGImageMode::Buffer ? WGResourceBinding::Type::BufferImage :
+                                                           WGResourceBinding::Type::Image;
+      break;
+    case Resource::BindType::SAMPLER:
+      if (image_mode(resource) != WGImageMode::Buffer) {
+        return -1;
+      }
+      type = WGResourceBinding::Type::BufferImage;
+      sampler_slot = true;
+      break;
+    default:
+      return -1;
+  }
+  for (const WGResourceBinding &binding : resources_) {
+    if (binding.vertex_alias && binding.type == type && binding.slot == resource.slot &&
+        (type != WGResourceBinding::Type::BufferImage || binding.sampler_slot == sampler_slot))
+    {
+      return int(binding.binding);
+    }
+  }
+  return -1;
 }
 
 uint32_t WGShaderInterface::subpass_input_binding_get(int index) const
