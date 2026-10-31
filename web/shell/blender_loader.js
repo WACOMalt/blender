@@ -66,8 +66,33 @@
   }
 
   const params = new URLSearchParams(location.search);
-  /* `?gpu=webgl2` forces the WebGL2 backend, for testing. */
-  const useWebGL2 = params.get('gpu') === 'webgl2' || !await hasWebGPU();
+  /* Browsers whose WebGPU failed once (the device was lost, e.g. "out of memory" while starting)
+   * use WebGL2 from then on, see `printErr`. `?gpu=webgpu` tries WebGPU again,
+   * `?gpu=webgl2` forces WebGL2. */
+  const GPU_CHOICE_KEY = 'blender-web-gpu';
+  const storage = {
+    get: () => {
+      try {
+        return localStorage.getItem(GPU_CHOICE_KEY);
+      }
+      catch (error) {
+        return null;
+      }
+    },
+    set: value => {
+      try {
+        value ? localStorage.setItem(GPU_CHOICE_KEY, value) : localStorage.removeItem(GPU_CHOICE_KEY);
+      }
+      catch (error) {
+      }
+    },
+  };
+  if (params.get('gpu') === 'webgpu') {
+    storage.set(null);
+  }
+  const useWebGL2 = params.get('gpu') === 'webgl2' ||
+                    (params.get('gpu') !== 'webgpu' && storage.get() === 'webgl2') ||
+                    !await hasWebGPU();
   if (useWebGL2 && !hasWebGL2()) {
     document.getElementById('progress').classList.add('hidden');
     fail('Blender needs WebGPU or WebGL2, neither is available in this browser.\n\n' +
@@ -110,12 +135,25 @@
     args.unshift('--gpu-backend', 'opengl');
   }
 
+  /* The index of the data files, always revalidated with the server. Its build time versions the
+   * other files (`?v=`): they keep their names between deployments, a browser holding a cached
+   * file from an older deployment would otherwise mix it with newer ones (`blender.js` and
+   * `blender.wasm` must match). */
+  let index;
+  try {
+    index = await (await fetch('blender-data.json', {cache: 'no-cache'})).json();
+  }
+  catch (error) {
+    fail(`Failed to download Blender's data files: ${error.message}`);
+    return;
+  }
+  const version = `?v=${index.mtime || 0}`;
+
   /* The data files download while the browser fetches and compiles `blender.wasm` (the module
    * is created right away and waits for the files in `preRun`). */
-  let index, data;
+  let data;
   const dataReady = (async () => {
-    index = await (await fetch('blender-data.json')).json();
-    data = await fetchBytes('blender-data.bin', loaded => {
+    data = await fetchBytes('blender-data.bin' + version, loaded => {
       setStatus(`Downloading Blender's data files… ${Math.round(loaded / 1e6)} / ` +
                 `${Math.round(index.size / 1e6)} MB`, loaded / index.size);
     });
@@ -160,7 +198,19 @@
     canvas: document.getElementById('canvas'),
     arguments: args,
     print: text => console.log(text),
-    printErr: text => console.error(text),
+    printErr: text => {
+      console.error(text);
+      /* Some browsers report a WebGPU adapter whose device fails (out of memory while starting
+       * with Firefox on Linux): use WebGL2 for this browser from now on. Not when WebGPU was
+       * asked for explicitly. */
+      if (!useWebGL2 && params.get('gpu') !== 'webgpu' && text.includes('WebGPU device lost')) {
+        storage.set('webgl2');
+        fail('WebGPU failed in this browser, restarting with WebGL2…');
+        setTimeout(() => location.reload(), 1000);
+      }
+    },
+    /* Versioned like `blender.js`, see `version`. */
+    locateFile: path => path.endsWith('.wasm') ? path + version : path,
     /* Called on the main thread with each frame drawn with WebGL2. */
     webglPresent: bitmap => bitmapRenderer.transferFromImageBitmap(bitmap),
     preRun: [
@@ -347,6 +397,14 @@
   }
 
   try {
+    /* `blender.js` defines `BlenderModule`; its pthread workers load the same versioned URL. */
+    await new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'blender.js' + version;
+      script.onload = resolve;
+      script.onerror = () => reject(new Error('blender.js could not be loaded'));
+      document.body.append(script);
+    });
     await BlenderModule(config);
   }
   catch (error) {
