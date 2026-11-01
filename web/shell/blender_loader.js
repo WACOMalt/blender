@@ -200,13 +200,8 @@
     print: text => console.log(text),
     printErr: text => {
       console.error(text);
-      /* Some browsers report a WebGPU adapter whose device fails (out of memory while starting
-       * with Firefox on Linux): use WebGL2 for this browser from now on. Not when WebGPU was
-       * asked for explicitly. */
-      if (!useWebGL2 && params.get('gpu') !== 'webgpu' && text.includes('WebGPU device lost')) {
-        storage.set('webgl2');
-        fail('WebGPU failed in this browser, restarting with WebGL2…');
-        setTimeout(() => location.reload(), 1000);
+      if (text.includes('WebGPU device lost')) {
+        fallBackToWebGL2();
       }
     },
     /* Versioned like `blender.js`, see `version`. */
@@ -299,8 +294,29 @@
     onAbort: reason => {
       overlay.classList.remove('hidden');
       fail(`Blender stopped: ${reason}`);
+      /* A failing WebGPU often aborts while starting before reporting the lost device. */
+      if (performance.now() - t0 < 60000) {
+        fallBackToWebGL2();
+      }
     },
   };
+
+  /**
+   * Some browsers report a WebGPU adapter whose device fails (out of memory while starting,
+   * Firefox on Linux): restart with WebGL2 and keep using it in this browser. Not when WebGPU
+   * was asked for explicitly (`?gpu=webgpu`).
+   */
+  let fallingBack = false;
+  function fallBackToWebGL2() {
+    if (useWebGL2 || fallingBack || params.get('gpu') === 'webgpu') {
+      return;
+    }
+    fallingBack = true;
+    storage.set('webgl2');
+    overlay.classList.remove('hidden');
+    setStatus('WebGPU failed in this browser, restarting with WebGL2…');
+    setTimeout(() => location.reload(), 1500);
+  }
   /** Write browser `File`s to the home directory, returns their paths. */
   async function writeFiles(files) {
     const paths = [];
